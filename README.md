@@ -9,7 +9,7 @@ AS20473 Vultr · 2分钟前
 
 |路径|说明|
 |-|-|
-|**`ip-float.exe`**|★ 成品。单文件、双击即开、零运行时依赖（≈710 KB）|
+|**`ip-float.exe`**|★ 成品。单文件、双击即开、零运行时依赖（≈710 KB）。**不进 git**，分发走 [Releases](https://github.com/jiqinghuang/ip-float/releases/latest)|
 |`src/`|C++ 源码 + 图标 + `build.ps1` 一键重编|
 |`preview-exe.png`|实拍|
 
@@ -180,6 +180,9 @@ python .site-assets\validate.py            # 校验站点页面是否符合该�
   换机器 / 换用户后弹窗会回来 —— 用 `pwsh -File src\sign.ps1 -ExportCer` 导出 `.cer`，
   在那台机器上双击安装到「当前用户 → 受信任的根证书颁发机构」即可。
 * 双击弹窗的两层拦截与处理办法见上文专节；`build.ps1` 重编后会自动重新签名。
-* 仓库已接上 git（`origin` = `https://github.com/jiqinghuang/ip-float.git`），但只有一个初始提交；
-  改源码时顺手多提交几次，别攒成一个大 commit —— 出问题才有得回退。
+* 仓库已接上 git（`origin` = `https://github.com/jiqinghuang/ip-float.git`）；改源码时顺手多提交几次，
+  别攒成一个大 commit —— 出问题才有得回退。
+* **`ip-float.exe` 不进仓库**：分发走 [GitHub Releases](https://github.com/jiqinghuang/ip-float/releases/latest)，
+  下载链接固定为 `/releases/latest`，不再随文件名或路径变化。重编一次哈希就变一次，把 700 KB 的二进制
+  反复写进 git 历史没有意义。`build.ps1` 照旧把产物生成在仓库根目录，只是它已被 `.gitignore` 忽略。
 
