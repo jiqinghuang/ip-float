@@ -1,0 +1,20 @@
+# ── 编译中间产物 ─────────────────────────────────────────────
+# build.ps1 用完会自己删掉 app.res.o，这里只是兜底
+*.o
+*.res.o
+
+# ── 运行时 / 自检产物 ────────────────────────────────────────
+# 仅当 %APPDATA%\ip-float\ 不可写时才会生成这个便携回退配置
+# （正常配置在 %APPDATA%\ip-float\settings.ini，不在仓库里）
+ip-float.ini
+
+# TakeShot（--shot / --shot-dlg）会在截图旁边写一个同名 .log，
+# 因为 -mwindows 构建没有控制台可输出
+*.png.log
+
+# ── 本地工具与系统垃圾 ───────────────────────────────────────
+.claude/
+.workbuddy/
+.vscode/
+Thumbs.db
+.DS_Store
