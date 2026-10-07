@@ -158,6 +158,19 @@ pwsh -File src\\\\build.ps1
 `build.ps1` 默认在编译完成后调用 `sign.ps1` 自动重新签名（`-NoSign` 可关掉）。
 证书已在 `CurrentUser\Root` 受信任的情况下，这一步**不需要管理员权限**。
 
+## 网站素材
+
+`.site-assets/` 是给个人网站 `project-ip-float.html` 生成截图素材的工具，跟 exe 本身无关：
+
+```powershell
+python .site-assets\generate.py            # 抓屏 + 合成 → .site-assets\out\
+python .site-assets\validate.py            # 校验站点页面是否符合该站既有约定
+```
+
+`generate.py` 用 exe 自带的自检模式（`--demo --shot` / `--shot-dlg`）抓屏，再把桌面像素
+清干净、扣出真正的圆角透明区域；产物拷到站点仓库的 `assets/ip-float/`。
+两个脚本的文档字符串里写了为什么必须"先把不透明度设成 100"等三个坑。
+
 ## 已知限制
 
 * 走 Windows **schannel**（WinHTTP）。如果网络里有中间人/企业代理导致证书校验失败，

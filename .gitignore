@@ -12,6 +12,12 @@ ip-float.ini
 # 因为 -mwindows 构建没有控制台可输出
 *.png.log
 
+# ── 网站素材工具的产物（.site-assets/generate.py）─────────────
+# build/ 是自检抓屏的原始截图，out/ 是处理后的网页素材；
+# 两者都能用 generate.py 随时重新生成，真实副本在 jiqinghuang.github.io 仓库里
+.site-assets/build/
+.site-assets/out/
+
 # ── 本地工具与系统垃圾 ───────────────────────────────────────
 .claude/
 .workbuddy/
