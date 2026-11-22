@@ -3,20 +3,24 @@
 *.o
 *.res.o
 
+# ── 构建输出 / 测试产物 ──────────────────────────────────────
+dist/
+test_ipinfo.exe
+ip-float.exe
+
 # ── 运行时 / 自检产物 ────────────────────────────────────────
 # 仅当 %APPDATA%\ip-float\ 不可写时才会生成这个便携回退配置
 # （正常配置在 %APPDATA%\ip-float\settings.ini，不在仓库里）
 ip-float.ini
 
-# TakeShot（--shot / --shot-dlg）会在截图旁边写一个同名 .log，
-# 因为 -mwindows 构建没有控制台可输出
+# self-test 会在截图/渲染图旁边写一个同名 .log（-mwindows 没有控制台），
+# --render 还会写 .json sidecar
 *.png.log
+*.png.json
 
-# ── 成品 exe ─────────────────────────────────────────────────
-# 分发改走 GitHub Releases（下载链接是稳定的 /releases/latest），不再进仓库：
-# 每重编一次哈希就变一次，把 700 KB 的二进制反复写进 git 历史没有意义。
-# build.ps1 照旧把产物生成在仓库根目录，只是它不再被追踪。
-ip-float.exe
+# ── 签名证书 ─────────────────────────────────────────────────
+# sign.ps1 -ExportCer 的产物；公钥证书不该顺手提交
+*.cer
 
 # ── 网站素材工具的产物（.site-assets/generate.py）─────────────
 # build/ 是自检抓屏的原始截图，out/ 是处理后的网页素材；

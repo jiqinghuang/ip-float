@@ -1,48 +1,89 @@
-# 重新编译 ip-float.exe（需要 D:\Mingw64\bin 下的 g++ 与 windres）
+# 重新编译 ip-float.exe（MinGW g++ / windres）
 #
-# 编译完会自动做两件收尾：
-#   1. Unblock-File —— 清掉可能残留的「来自互联网」标记（MOTW / Zone.Identifier）
-#   2. sign.ps1     —— 自签名。这是消除「打开文件 - 安全警告」弹窗的必要一环：
-#                      附件管理器认本机信任的证书，签名后「发行商」不再显示为
-#                      「未知发布者」。详见 README。
-#   （SmartScreen「Windows 已保护你的电脑」是另一层，自签名挡不住，需要单独关。）
-#
-# 证书已在 CurrentUser\Root 受信任时，签名这一步不需要管理员权限。
+# 默认只编译，不签名：构建不应该有“创建根证书”这种副作用。
+# 需要签名时显式加 -Sign，或单独跑 sign.ps1。
 #
 # 用法：
-#   pwsh -File src\build.ps1            # 编译 + 清标记 + 签名
-#   pwsh -File src\build.ps1 -NoSign    # 只编译，不签名
+#   pwsh -File src\build.ps1
+#   pwsh -File src\build.ps1 -Test            # 编译 + 跑纯逻辑单测
+#   pwsh -File src\build.ps1 -Sign            # 编译 + 签名
+#   pwsh -File src\build.ps1 -MingwBin C:\msys64\mingw64\bin -OutDir dist -Werror
 [CmdletBinding()]
-param([switch] $NoSign)
+param(
+    [string] $MingwBin = 'D:\Mingw64\bin',
+    [string] $OutDir,
+    [switch] $Sign,
+    [switch] $Test,
+    [switch] $Werror
+)
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$here  = Split-Path -Parent $MyInvocation.MyCommand.Path
-$root  = Split-Path -Parent $here
-$mingw = 'D:\Mingw64\bin'
-$exe   = Join-Path $root 'ip-float.exe'
+
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$root = Split-Path -Parent $here
+if (-not $OutDir) {
+    $OutDir = $root
+} elseif (-not [System.IO.Path]::IsPathRooted($OutDir)) {
+    # 相对路径按调用者当前目录解析，然后在 Push-Location src 之前固定成绝对路径
+    $OutDir = Join-Path (Get-Location).Path $OutDir
+}
+$OutDir = [System.IO.Path]::GetFullPath($OutDir)
+
+if (-not [System.IO.Path]::IsPathRooted($MingwBin)) {
+    $MingwBin = Join-Path (Get-Location).Path $MingwBin
+}
+$MingwBin = [System.IO.Path]::GetFullPath($MingwBin)
+if (-not (Test-Path -LiteralPath $MingwBin)) {
+    throw "找不到 MinGW 目录：$MingwBin（用 -MingwBin 指定）"
+}
+
+$gpp     = Join-Path $MingwBin 'g++.exe'
+$windres = Join-Path $MingwBin 'windres.exe'
+foreach ($tool in @($gpp, $windres)) {
+    if (-not (Test-Path -LiteralPath $tool)) { throw "缺少工具：$tool" }
+}
+
+$exe = Join-Path $OutDir 'ip-float.exe'
+New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+
+$sources = @(
+    'main.cpp', 'app.cpp', 'config.cpp', 'http.cpp', 'ipinfo.cpp',
+    'card.cpp', 'settings_dlg.cpp', 'tray.cpp', 'selftest.cpp', 'util.cpp'
+) | ForEach-Object { Join-Path $here $_ }
+
+$warn = @('-Wall', '-Wextra')
+if ($Werror) { $warn += '-Werror' }
 
 Push-Location $here
 try {
-    & "$mingw\windres.exe" app.rc -o app.res.o
-    & "$mingw\g++.exe" -std=gnu++17 -O2 -Wall -Wextra -mwindows -static -static-libgcc -static-libstdc++ `
-        -o $exe ip-float.cpp app.res.o `
+    & $windres app.rc -o app.res.o
+    if ($LASTEXITCODE -ne 0) { throw "windres 失败（exit $LASTEXITCODE）" }
+
+    & $gpp -std=gnu++17 -O2 -DUNICODE -D_UNICODE @warn -mwindows -static -static-libgcc -static-libstdc++ `
+        -o $exe $sources (Join-Path $here 'app.res.o') `
         -lgdiplus -lwinhttp -lshell32 -luser32 -lgdi32 -lole32
     if ($LASTEXITCODE -ne 0) { throw "编译失败（exit $LASTEXITCODE）" }
 
-    # 有就清，没有也不报错
     Unblock-File -LiteralPath $exe -ErrorAction SilentlyContinue
-
     Write-Host "已重新编译: $exe"
 } finally {
     Remove-Item (Join-Path $here 'app.res.o') -Force -ErrorAction SilentlyContinue
     Pop-Location
 }
 
-if (-not $NoSign) {
-    try {
-        & (Join-Path $here 'sign.ps1') -ExePath $exe
-    } catch {
-        Write-Warning "签名失败（exe 仍可运行，但双击可能弹「打开文件 - 安全警告」）：$($_.Exception.Message)"
-        Write-Warning "如果提示「拒绝访问」，用管理员身份重跑一次本脚本即可（第一次建证书时需要）。"
-    }
+if ($Test) {
+    $testExe = Join-Path $OutDir 'test_ipinfo.exe'
+    & $gpp -std=gnu++17 -O2 -DUNICODE -D_UNICODE @warn -o $testExe `
+        (Join-Path $root 'tests\test_ipinfo.cpp') `
+        (Join-Path $here 'ipinfo.cpp') (Join-Path $here 'util.cpp') `
+        -lgdi32 -luser32 -lshell32
+    if ($LASTEXITCODE -ne 0) { throw "测试编译失败（exit $LASTEXITCODE）" }
+
+    & $testExe
+    if ($LASTEXITCODE -ne 0) { throw "测试失败（exit $LASTEXITCODE）" }
+}
+
+if ($Sign) {
+    & (Join-Path $here 'sign.ps1') -ExePath $exe
 }
