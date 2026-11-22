@@ -30,9 +30,21 @@ jobs:
           install: mingw-w64-x86_64-gcc
           suppress-deprecation-warnings: msystem-mingw64
 
-      - name: Build and test
+      - name: Build
         shell: pwsh
-        run: ./src/build.ps1 -MingwBin "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin" -OutDir dist -Test -Werror
+        run: ./src/build.ps1 -MingwBin "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin" -OutDir dist -Werror
+
+      # 单测放在 MSYS2 shell 里跑：PowerShell 直接调用 MSYS2 的 g++ 在 runner 上
+      # 会出现 exit 1 且没有任何诊断（进程/流处理差异），bash 下输出完整可查。
+      - name: Unit tests
+        shell: msys2 {0}
+        run: |
+          g++ --version | head -1
+          g++ -std=gnu++17 -O2 -DUNICODE -D_UNICODE -Wall -Wextra -Werror \
+            -o dist/test_ipinfo.exe \
+            tests/test_ipinfo.cpp src/ipinfo.cpp src/util.cpp \
+            -lgdi32 -luser32 -lshell32
+          ./dist/test_ipinfo.exe
 
       - name: Upload exe
         uses: actions/upload-artifact@v4
