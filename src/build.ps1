@@ -57,7 +57,7 @@ if ($Werror) { $warn += '-Werror' }
 
 Push-Location $here
 try {
-    & $windres app.rc -o app.res.o
+    & $windres -I $here app.rc -o app.res.o
     if ($LASTEXITCODE -ne 0) { throw "windres 失败（exit $LASTEXITCODE）" }
 
     & $gpp -std=gnu++17 -O2 -DUNICODE -D_UNICODE @warn -mwindows -static -static-libgcc -static-libstdc++ `
