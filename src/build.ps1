@@ -83,8 +83,7 @@ try {
 
 if ($Test) {
     $testExe = Join-Path $OutDir 'test_ipinfo.exe'
-    $outLog = Join-Path $OutDir 'test-build.out.log'
-    $errLog = Join-Path $OutDir 'test-build.err.log'
+    $outLog = Join-Path $OutDir 'test-build.log'
     $testArgs = @('-std=gnu++17', '-O2', '-DUNICODE', '-D_UNICODE') + $warn + @(
         '-o', $testExe,
         (Join-Path $root 'tests\test_ipinfo.cpp'),
@@ -93,16 +92,14 @@ if ($Test) {
         '-lgdi32', '-luser32', '-lshell32')
 
     Write-Host "测试编译：$gpp"
-    Remove-Item $outLog, $errLog -Force -ErrorAction SilentlyContinue
-    # 用 Start-Process 拿真实 ExitCode 和两个输出流，绕开 PowerShell 原生命令的流处理差异
-    $proc = Start-Process -FilePath $gpp -ArgumentList $testArgs -NoNewWindow -Wait -PassThru `
-        -RedirectStandardOutput $outLog -RedirectStandardError $errLog
-    # -PassThru 返回的对象在重定向模式下 ExitCode 可能还没填，显式 WaitForExit 再读
-    $proc.WaitForExit()
-    $testCode = $proc.ExitCode
+    Remove-Item $outLog -Force -ErrorAction SilentlyContinue
+    # 走 cmd /c 重定向：Start-Process -PassThru 在这台机器上 ExitCode 恒为空，
+    # 而 PowerShell 直接把原生命令输出重定向到文件时又会踩命名管道限制。
+    $quoted = $testArgs | ForEach-Object { if ($_ -match '\s') { '"{0}"' -f $_ } else { $_ } }
+    $cmdLine = '"{0}" {1} > "{2}" 2>&1' -f $gpp, ($quoted -join ' '), $outLog
+    cmd /c $cmdLine
+    $testCode = $LASTEXITCODE
     if (Test-Path $outLog) { Get-Content -LiteralPath $outLog | ForEach-Object { Write-Host "  $_" } }
-    if (Test-Path $errLog) { Get-Content -LiteralPath $errLog | ForEach-Object { Write-Host "  $_" } }
-    if ($null -eq $testCode) { throw "无法读取测试编译器的退出码（g++ 没能正常启动）" }
     if ($testCode -ne 0) { throw "测试编译失败（exit $testCode）" }
 
     & $testExe
