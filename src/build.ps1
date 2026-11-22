@@ -56,8 +56,14 @@ $warn = @('-Wall', '-Wextra')
 if ($Werror) { $warn += '-Werror' }
 
 Push-Location $here
+# windres 通过 popen 调用 "gcc -E" 预处理 .rc；在纯 PowerShell/CI 环境里
+# 既找不到 gcc（PATH 里没有 MinGW），popen 也可能被拦。两件事一起解决：
+#   · 把 MinGW 目录临时放进 PATH，gcc 能被原生找到
+#   · --use-temp-file 让 windres 走临时文件而不是 popen（MSYS2 的已知坑）
+$oldPath = $env:PATH
+$env:PATH = "$MingwBin;$env:PATH"
 try {
-    & $windres -I $here app.rc -o app.res.o
+    & $windres --use-temp-file -I $here app.rc -o app.res.o
     if ($LASTEXITCODE -ne 0) { throw "windres 失败（exit $LASTEXITCODE）" }
 
     & $gpp -std=gnu++17 -O2 -DUNICODE -D_UNICODE @warn -mwindows -static -static-libgcc -static-libstdc++ `
@@ -69,6 +75,7 @@ try {
     Write-Host "已重新编译: $exe"
 } finally {
     Remove-Item (Join-Path $here 'app.res.o') -Force -ErrorAction SilentlyContinue
+    $env:PATH = $oldPath
     Pop-Location
 }
 
