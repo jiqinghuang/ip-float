@@ -1,6 +1,7 @@
 #pragma once
 
-// 版本号的唯一来源：资源、User-Agent、README 都从这里取。
+// Single source of truth for the version number.
+// app.rc includes this file; the User-Agent uses the same value.
 #define IPFLOAT_VERSION_A "3.1.0"
 #define IPFLOAT_VERSION_W L"3.1.0"
 
