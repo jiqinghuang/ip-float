@@ -67,8 +67,8 @@ std::wstring LocalTimeString(uint64_t fileTimeUtc)
     SYSTEMTIME utc = {}, local = {};
     if (!FileTimeToSystemTime(&ft, &utc)) return std::wstring();
     if (!SystemTimeToTzSpecificLocalTime(nullptr, &utc, &local)) local = utc;
-    wchar_t buf[16] = {};
-    swprintf(buf, 16, L"%02u:%02u:%02u",
+    wchar_t buf[32] = {};
+    swprintf(buf, 32, L"%02u:%02u:%02u",
              (unsigned)local.wHour, (unsigned)local.wMinute, (unsigned)local.wSecond);
     return buf;
 }

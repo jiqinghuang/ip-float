@@ -19,6 +19,8 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+# 原生命令往 stderr 写东西时不要当成 PowerShell 异常（否则真实退出码会被掩盖）
+$PSNativeCommandUseErrorActionPreference = $false
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
@@ -81,11 +83,21 @@ try {
 
 if ($Test) {
     $testExe = Join-Path $OutDir 'test_ipinfo.exe'
+    $testLogPath = Join-Path $OutDir 'test-build.log'
+    Write-Host "测试编译：$gpp"
+    Write-Host ("  " + (@('-std=gnu++17', '-O2', '-DUNICODE', '-D_UNICODE') + $warn +
+        @('-o', $testExe, (Join-Path $root 'tests\test_ipinfo.cpp'),
+          (Join-Path $here 'ipinfo.cpp'), (Join-Path $here 'util.cpp'),
+          '-lgdi32', '-luser32', '-lshell32') -join ' '))
     & $gpp -std=gnu++17 -O2 -DUNICODE -D_UNICODE @warn -o $testExe `
         (Join-Path $root 'tests\test_ipinfo.cpp') `
         (Join-Path $here 'ipinfo.cpp') (Join-Path $here 'util.cpp') `
-        -lgdi32 -luser32 -lshell32
-    if ($LASTEXITCODE -ne 0) { throw "测试编译失败（exit $LASTEXITCODE）" }
+        -lgdi32 -luser32 -lshell32 *> $testLogPath
+    $testCode = $LASTEXITCODE
+    if (Test-Path $testLogPath) {
+        Get-Content -LiteralPath $testLogPath | ForEach-Object { Write-Host "  $_" }
+    }
+    if ($testCode -ne 0) { throw "测试编译失败（exit $testCode）" }
 
     & $testExe
     if ($LASTEXITCODE -ne 0) { throw "测试失败（exit $LASTEXITCODE）" }
