@@ -83,7 +83,8 @@ try {
 
 if ($Test) {
     $testExe = Join-Path $OutDir 'test_ipinfo.exe'
-    $outLog = Join-Path $OutDir 'test-build.log'
+    # 日志写到 TEMP，避免默认 OutDir=仓库根目录时污染 git status
+    $outLog = Join-Path $env:TEMP 'ip-float-test-build.log'
     $testArgs = @('-std=gnu++17', '-O2', '-DUNICODE', '-D_UNICODE') + $warn + @(
         '-o', $testExe,
         (Join-Path $root 'tests\test_ipinfo.cpp'),
