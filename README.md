@@ -1,5 +1,7 @@
 # ip-float — 出口 IP 桌面悬浮窗
 
+[![build](https://github.com/jiqinghuang/ip-float/actions/workflows/build.yml/badge.svg)](https://github.com/jiqinghuang/ip-float/actions/workflows/build.yml)
+
 无边框置顶小卡片，两行显示：
 
 ```
@@ -9,7 +11,7 @@ AS20473 Vultr · 2分钟前
 
 |路径|说明|
 |-|-|
-|**`ip-float.exe`**|★ 成品。单文件、双击即开、零运行时依赖。**不进 git**，分发走 [Releases](https://github.com/jiqinghuang/ip-float/releases/latest)|
+|**`ip-float.exe`**|★ 成品（当前 **v3.1.0**，约 812 KB）。单文件、双击即开、零运行时依赖。**不进 git**，分发走 [Releases](https://github.com/jiqinghuang/ip-float/releases/latest)|
 |`src/`|C++ 源码（按职责拆分）+ 图标 + `build.ps1` / `sign.ps1`|
 |`tests/`|纯逻辑单测（`build.ps1 -Test`）|
 |`.site-assets/`|网站素材生成 / 站点页面校验|
@@ -251,11 +253,11 @@ python .site-assets\validate.py --site-root ..\jiqinghuang.github.io
   换机器 / 换用户后弹窗会回来 —— 用 `pwsh -File src\sign.ps1 -ExportCer` 导出 `.cer`，
   在那台机器上双击安装到「当前用户 → 受信任的根证书颁发机构」即可。
 * 自签名证书的私钥默认不可导出；如果旧证书是可导出的，建议 `-RecreateCert` 重建。
-* 双击弹窗的两层拦截与处理办法见上文专节；`build.ps1 -Sign` 重编后会自动重新签名。
+* 双击弹窗的两层拦截与处理办法见上文专节；`build.ps1 -Sign` 编译后会自动重新签名。
 * 设置窗口是模态的，拖到另一块不同 DPI 的屏幕上不会重新排版（卡片本身会）；
   窗口默认贴在卡片旁边打开，正常使用不会碰到。
 * 仓库已接上 git（`origin` = `https://github.com/jiqinghuang/ip-float.git`）；
   改源码时顺手多提交几次，别攒成一个大 commit —— 出问题才有得回退。
 * **`ip-float.exe` 不进仓库**：分发走 [GitHub Releases](https://github.com/jiqinghuang/ip-float/releases/latest)，
-  下载链接固定为 `/releases/latest`。重编一次哈希就变一次，把 800 KB 的二进制反复写进 git
+  下载链接固定为 `/releases/latest`。重编一次哈希就变一次，把 812 KB 的二进制反复写进 git
   历史没有意义。`build.ps1` 默认输出到仓库根目录，但 `dist/` 和 `ip-float.exe` 都被忽略。
