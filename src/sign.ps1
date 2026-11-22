@@ -10,17 +10,23 @@
       2. 把它的公钥放进 CurrentUser\Root，让本机信任它
       3. 签名 exe，并顺手清掉「从互联网下载」标记
 
+    私钥策略默认 NonExportable：这把证书在本机 Root 里受信任，
+    如果私钥还能导出，任何能读到用户配置目录的进程都可以拿它签任意 exe。
+    有效期 5 年（不是 20 年），到期后重新生成本地证书即可。
+
     注意：写证书库（%APPDATA%\Microsoft\SystemCertificates 与 Crypto）在受限/沙箱
     环境里可能被拒；被拒时用管理员身份跑本脚本。
 
     用法：
       pwsh -File src\sign.ps1                    # 签根目录的 ip-float.exe
       pwsh -File src\sign.ps1 -ExportCer         # 顺便导出一份 ip-float-signing.cer
+      pwsh -File src\sign.ps1 -RecreateCert      # 删掉旧证书，生成 NonExportable 的新证书
 #>
 [CmdletBinding()]
 param(
     [string] $ExePath,
-    [switch] $ExportCer
+    [switch] $ExportCer,
+    [switch] $RecreateCert
 )
 
 $ErrorActionPreference = 'Stop'
@@ -75,11 +81,14 @@ function Get-SigningCert {
 }
 
 function Remove-OldCerts {
-    # 清掉同名的旧证书（尤其是缺 KeyUsage 的坏证书），免得被反复复用
+    param([string] $KeepThumbprint = '')
+    # 清掉同名的旧证书；KeepThumbprint 用于 -RecreateCert：新证书先建好，再删旧的，
+    # 这样创建失败时旧证书/私钥还在，不会把用户弄成“没有可用签名证书”的状态。
     foreach ($storeName in 'My', 'Root') {
         $s = [System.Security.Cryptography.X509Certificates.X509Store]::new($storeName, 'CurrentUser')
         $s.Open($OF::ReadWrite)
         foreach ($old in @($s.Certificates | Where-Object { $_.Subject -eq $Subject })) {
+            if ($KeepThumbprint -and $old.Thumbprint -eq $KeepThumbprint) { continue }
             $s.Remove($old)
         }
         $s.Close()
@@ -88,26 +97,46 @@ function Remove-OldCerts {
 
 function New-SigningCert {
     # 用 PKI 模块的 New-SelfSignedCertificate，而不是手搓 CertificateRequest：
-    # CodeSigningCert 模板会自动写对 EKU=Code Signing 和 KeyUsage=DigitalSignature，
-    # 也避免了「PFX 往返后私钥/扩展丢失」那类坑。证书直接落进 CurrentUser\My。
+    # CodeSigningCert 模板会自动写对 EKU=Code Signing 和 KeyUsage=DigitalSignature。
+    # KeyExportPolicy NonExportable：私钥不能导出，降低被拿去签其他 exe 的风险。
     New-SelfSignedCertificate -Type CodeSigningCert `
         -Subject $Subject `
         -CertStoreLocation 'Cert:\CurrentUser\My' `
         -HashAlgorithm SHA256 `
-        -NotAfter (Get-Date).AddYears(20) `
+        -KeyExportPolicy NonExportable `
+        -NotAfter (Get-Date).AddYears(5) `
         -ErrorAction Stop
 }
 
 # ── 1. 证书 ────────────────────────────────────────────────────────────────
-$cert = Get-SigningCert
-if (-not $cert) {
-    Remove-OldCerts
-    $cert = New-SigningCert
-    $why = Test-UsableForCodeSigning $cert
+$cert = $null
+if ($RecreateCert) {
+    Write-Host "重建证书：先创建新证书，成功后再移除旧的同名证书" -ForegroundColor DarkGray
+    $newCert = New-SigningCert
+    $why = Test-UsableForCodeSigning $newCert
     if ($why) { throw "新建的证书不可用于代码签名：$why" }
+    Remove-OldCerts -KeepThumbprint $newCert.Thumbprint
+    $cert = $newCert
     Write-Host "已创建代码签名证书：$($cert.Thumbprint)" -ForegroundColor DarkGray
 } else {
-    Write-Host "复用已有代码签名证书：$($cert.Thumbprint)" -ForegroundColor DarkGray
+    $cert = Get-SigningCert
+    if ($cert) {
+        Write-Host "复用已有代码签名证书：$($cert.Thumbprint)" -ForegroundColor DarkGray
+        try {
+            $policy = "$($cert.PrivateKey.Key.ExportPolicy)"
+            if ($policy -and $policy -ne 'None') {
+                Write-Warning "现有证书私钥可导出（$policy）。建议跑一次 -RecreateCert 生成 NonExportable 新证书。"
+            }
+        } catch {
+            # 老式 CSP 私钥没有 ExportPolicy，忽略
+        }
+    } else {
+        Remove-OldCerts
+        $cert = New-SigningCert
+        $why = Test-UsableForCodeSigning $cert
+        if ($why) { throw "新建的证书不可用于代码签名：$why" }
+        Write-Host "已创建代码签名证书：$($cert.Thumbprint)" -ForegroundColor DarkGray
+    }
 }
 
 # ── 2. 本机信任（CurrentUser\Root）─────────────────────────────────────────
