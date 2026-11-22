@@ -6,18 +6,26 @@
 用法：
     python .site-assets/validate.py                       # 默认校验 project-ip-float.html
     python .site-assets/validate.py projects.html         # 也可校验被改动过的其他页面
+    python .site-assets/validate.py --site-root D:\\repo\\jiqinghuang.github.io
+
+站点根目录默认取 ip-float 仓库旁边的 jiqinghuang.github.io，可用 --site-root
+或 IPFLOAT_SITE_ROOT 覆盖（不再写死某个用户目录）。
 """
+import argparse
 import os
 import re
 import sys
 
-SITE_ROOT = r"C:\Users\Jiqing\Desktop\repo\jiqinghuang.github.io"
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+DEFAULT_SITE = os.path.abspath(os.path.join(ROOT, "..", "jiqinghuang.github.io"))
 EXTERNAL = ("http://", "https://", "#", "mailto:")
 
 
-def validate(name):
-    page = os.path.join(SITE_ROOT, name)
-    html = open(page, encoding="utf-8").read()
+def validate(name, site_root):
+    page = os.path.join(site_root, name)
+    with open(page, encoding="utf-8") as f:
+        html = f.read()
     problems = []
 
     def check(cond, msg):
@@ -46,19 +54,19 @@ def validate(name):
     for href in re.findall(r'href="([^"]+)"', html):
         if href.startswith(EXTERNAL):
             continue
-        target = os.path.join(SITE_ROOT, href.split("#")[0].split("?")[0])
+        target = os.path.join(site_root, href.split("#")[0].split("?")[0])
         check(os.path.isfile(target), f"站内链接目标不存在: {href}")
 
     # 5. 图片存在 + 有 alt（png/webp 成对）
     for src in re.findall(r'<img[^>]*\ssrc="([^"]+)"', html) + \
                re.findall(r'<source[^>]*\ssrcset="([^"]+)"', html):
         if not src.startswith("http"):
-            check(os.path.isfile(os.path.join(SITE_ROOT, src)), f"图片不存在: {src}")
+            check(os.path.isfile(os.path.join(site_root, src)), f"图片不存在: {src}")
     for tag in re.findall(r"<img\b[^>]*>", html):
         check('alt="' in tag, f"img 缺少 alt: {tag[:70]}")
 
     # 6. 站点既有结构
-    for must in ('js/main.js', 'css/style.css', "favicon.svg"):
+    for must in ("js/main.js", "css/style.css", "favicon.svg"):
         check(must in html, f"缺少站点既有结构: {must}")
 
     # 7. 不留占位内容
@@ -72,6 +80,21 @@ def validate(name):
     return not problems
 
 
+def main():
+    ap = argparse.ArgumentParser(description="校验站点页面是否符合既有约定")
+    ap.add_argument("pages", nargs="*", default=["project-ip-float.html"])
+    ap.add_argument("--site-root",
+                    default=os.environ.get("IPFLOAT_SITE_ROOT", DEFAULT_SITE),
+                    help="站点仓库根目录（默认 ../jiqinghuang.github.io）")
+    args = ap.parse_args()
+
+    site_root = os.path.abspath(args.site_root)
+    if not os.path.isdir(site_root):
+        sys.exit(f"站点根目录不存在: {site_root}（用 --site-root 指定）")
+
+    pages = args.pages or ["project-ip-float.html"]
+    sys.exit(0 if all(validate(n, site_root) for n in pages) else 1)
+
+
 if __name__ == "__main__":
-    names = sys.argv[1:] or ["project-ip-float.html"]
-    sys.exit(0 if all(validate(n) for n in names) else 1)
+    main()

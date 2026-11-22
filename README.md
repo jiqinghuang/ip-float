@@ -9,8 +9,10 @@ AS20473 Vultr · 2分钟前
 
 |路径|说明|
 |-|-|
-|**`ip-float.exe`**|★ 成品。单文件、双击即开、零运行时依赖（≈710 KB）。**不进 git**，分发走 [Releases](https://github.com/jiqinghuang/ip-float/releases/latest)|
-|`src/`|C++ 源码 + 图标 + `build.ps1` 一键重编|
+|**`ip-float.exe`**|★ 成品。单文件、双击即开、零运行时依赖。**不进 git**，分发走 [Releases](https://github.com/jiqinghuang/ip-float/releases/latest)|
+|`src/`|C++ 源码（按职责拆分）+ 图标 + `build.ps1` / `sign.ps1`|
+|`tests/`|纯逻辑单测（`build.ps1 -Test`）|
+|`.site-assets/`|网站素材生成 / 站点页面校验|
 |`preview-exe.png`|实拍|
 
 ## 用法
@@ -19,64 +21,115 @@ AS20473 Vultr · 2分钟前
 
 * 纯 Win32 + GDI+，MinGW 静态编译，**不依赖 Python / .NET / Node / VCRedist**
 * 只调 Windows 自带库：`gdiplus`、`winhttp`、`user32`、`gdi32`、`shell32`、`kernel32`
-* 无控制台窗口、不占任务栏（只在托盘）、DPI 100%\~200% 自适应（**包括拖到另一块不同缩放的屏幕**）
+* 无控制台窗口、不占任务栏（只在托盘）、DPI 100%–200% 自适应（**包括拖到另一块不同缩放的屏幕**）
 * 半透明圆角卡片，拖到哪记到哪
 * **单实例**：已经有一个在跑时，再双击只会把已有卡片闪一下，不会开出第二张
-* 点卡片**不抢焦点**（`WS\\\_EX\\\_NOACTIVATE`），你正在打的字不会被打断
+* 点卡片**不抢焦点**（`WS_EX_NOACTIVATE`），你正在打的字不会被打断
 
-**右键菜单**：状态行（含数据源与更新时间） · 立即刷新 · 刷新间隔（1/3/5/10/30/60 分钟） · 设置… · 复制 IP · 总在最前 · 开机自启 · 退出
-**托盘图标**：双击显示/隐藏，右键菜单同上
-**设置窗口**：刷新间隔（1–1440 分钟）、不透明度（0–100）、总在最前、开机自启（写 `HKCU\\\\...\\\\Run`）
+**右键菜单**（卡片和托盘是同一套）：状态行（IP / 组织 / 数据源 / 更新时间） · 立即刷新 · 刷新间隔（1/3/5/10/30/60 分钟） · 设置… · 复制 IP · 总在最前 · 开机自启 · 退出。
+**托盘图标**：双击显示/隐藏；右键菜单同上，额外多一项「隐藏卡片 / 显示卡片」。
+**设置窗口**：刷新间隔（1–1440 分钟）、不透明度（0–100）、总在最前、开机自启（写 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`）。
 
-> 不透明度拉到 \\\*\\\*0\\\*\\\* 卡片就完全透明了（还占着位置、点不到），这时从\\\*\\\*托盘图标\\\*\\\*右键 → 设置… 改回来。
+> 不透明度拉到 **0** 卡片就完全透明了（还占着位置、点不到），这时从**托盘图标**右键 → 设置… 改回来。
 
-配置位置：`%APPDATA%\\\\ip-float\\\\settings.ini`；如果那目录不可写，自动退到 exe 同目录的 `ip-float.ini`
+### 配置位置
+
+优先 `%APPDATA%\ip-float\settings.ini`；如果那目录不可写，自动退到 exe 同目录的 `ip-float.ini`
 （若 APPDATA 里已有配置会先搬过去，不会默默丢设置；右键菜单最底下会显示当前实际生效的路径）。
-删掉配置就恢复默认（右上角、5 分钟、94% 不透明）。
+
+要固定使用某份配置，用 **`--ini <path>`**：它优先于上面两者，自检和素材生成都走这个，
+不会读也不会写你的真实配置。
 
 > **受限环境会静默切到便携模式。** 在沙箱、低权限账户或被杀软拦截的 shell 里运行时，
 > `%APPDATA%\ip-float` 可能写不进去，程序会退到 exe 同目录的 `ip-float.ini` ——
-> 界面上没有任何提示，只有右键菜单最底下那行路径能看出来。
-> 最快的判据：**exe 旁边一旦出现 `ip-float.ini`，就等于那一次启动没能写进 APPDATA**
-> （注意这和账户权限无关 —— 受限的是那一次启动所用的令牌，正常双击通常写 APPDATA 没问题）。
-> 要留心的是：退化时**只有当 exe 目录还没有 ini，才会把 APPDATA 的配置搬过去**；
-> 如果那里已经躺着一份旧的，程序会直接沿用旧值（间隔、不透明度、坐标都可能是很久以前的），
-> 而 APPDATA 里那份真实配置被完全忽略。便携模式下改的设置也**不会**回流到 APPDATA，
-> 下次正常双击仍然读 APPDATA。
+> 只有右键菜单最底下那行路径能看出来。最快的判据：**exe 旁边一旦出现 `ip-float.ini`，
+> 就等于那一次启动没能写进 APPDATA**。
+> 退化时**只有当 exe 目录还没有 ini，才会把 APPDATA 的配置搬过去**；如果那里已经有一份旧的，
+> 程序会直接沿用旧值（间隔、不透明度、坐标都可能是很久以前的）。便携模式下改的设置
+> **不会**回流到 APPDATA，下次正常双击仍然读 APPDATA。
 > 它已在 `.gitignore` 里，反复生成也不会污染仓库；但别让这份副本长期停在旧值上 ——
 > 删掉它，下一次退化启动会重新从 APPDATA 迁移一份过来。
 
-命令行（平时用不到）：
+删掉配置就恢复默认（右上角、5 分钟、94% 不透明）。`--ini` 指向的文件不存在时同样从默认值开始。
+
+### 命令行
 
 ```powershell
 ip-float.exe --interval 10                       # 临时改间隔
-ip-float.exe --source https://你的镜像/ip.json    # 换数据源（企业内网/自建）
-ip-float.exe --demo --shot out.png               # 假数据渲染一张卡片自检图
-ip-float.exe --demo --shot-dlg dlg.png           # 给设置窗口拍一张自检图
+ip-float.exe --source https://你的镜像/ip.json    # 换数据源（会写进 ini，下次继续生效）
+ip-float.exe --ini D:\tmp\ip-float.ini           # 固定用某份配置
 ```
 
-两个 `--shot` 都不联网、且**不受单实例限制**，改完 UI 可以随时验证渲染。
-截图会在同名位置写一个 `.log`（因为是 `-mwindows` 构建，没有控制台可输出）。
+自检 / 素材生成：
+
+```powershell
+ip-float.exe --render out\card.png --render-scale 2   # 离屏渲染卡片（不联网、不建窗、不读写配置）
+ip-float.exe --demo --shot out\card-screen.png        # 屏幕抓图 smoke test（演示数据）
+ip-float.exe --demo --shot-dlg out\dlg.png            # 设置窗口抓图
+```
+
+* `--render` 直接画进 32bpp 位图，输出自带透明圆角，**不依赖桌面、壁纸、不透明度或屏幕 DPI**；
+  同时写 `card.png.json`（width/height/scale/cornerRadius/colors）和 `card.png.log`。
+  `--render-scale 2` 是 2x（680×132），默认也是 2。
+* `--shot` 走真实的卡片窗口，默认用演示数据（不联网）；只有同时给 `--source` 才取真实数据。
+  `--shot-dlg` 只拍设置窗口，永远用演示数据、不联网。
+* 两种自检都**只读配置、不写回**（不会改你的位置/间隔/数据源）；也都不受单实例限制。
+  一次只能拍一个。
+* `--shot` 是屏幕抓图 smoke test，会受当前不透明度/桌面影响；给网页或文档用的干净素材
+  请用 `--render`。`--shot-dlg` 拍的设置窗口本身不透明，不受不透明度影响。
+
+## 源码结构
+
+```
+src/
+  main.cpp          WinMain / 命令行 / DPI awareness
+  app.cpp|app.h     App 状态、窗口过程、菜单、抓取编排
+  config.cpp|.h     ini 路径、读写、开机自启注册表
+  http.cpp|.h       WinHTTP GET + 错误码翻译
+  ipinfo.cpp|.h     纯解析：JSON -> IpInfo（不碰窗口）
+  card.cpp|.h       CardMetrics / BuildCardText / GDI+ 绘制 / PNG
+  settings_dlg.cpp  设置窗口
+  tray.cpp|.h       Shell_NotifyIcon + TaskbarCreated
+  selftest.cpp|.h   演示数据 + --render
+  util.cpp|.h       UTF-8 / 时间 / DPI / URL
+  version.h         版本号唯一来源
+  app.rc            ICON / manifest / VERSIONINFO
+  app.manifest      asInvoker + PerMonitorV2 + longPathAware
+tests/
+  test_ipinfo.cpp   纯逻辑单测
+```
+
+设计边界：纯逻辑（JSON、卡片文案、时间格式化）不碰窗口；I/O（HTTP、配置）不碰 UI；
+`app.cpp` 只负责接线。这样 `ipinfo/util` 可以脱离窗口直接单测，渲染也能离屏跑。
 
 ## 数据源
 
 `https://ipinfo.io/json`，失败自动换 `https://ipapi.co/json/`；都不需要 key，
-超时是 DNS / 连接 / 发送 / 接收各 8 秒。
-失败时保留上次结果、状态点变橙，并在卡片上写明原因：
+超时是 DNS / 连接 / 发送 / 接收各 8 秒。失败时保留上次结果、状态点变橙，并在卡片上写明原因：
 
 * WinHTTP 错误码翻成了中文，例如 `12185：证书用途不匹配（常见于代理/中间人拦截）`、`12029：无法连接（端口不通、被墙，或该走代理）`
 * HTTP 状态码也会给建议，例如 `429：请求太频繁，被数据源限流（调大间隔，或用 --source 换源）`、`403：被拒绝（数据源要 token，或你的出口 IP 被限流封禁）`
 
+用 `--source` 换成自建源后，地址会写进 ini 的 `source=`，开机自启也会继续用它。
+清空 `source=`（或 `--source ""`）即可回到内置双源。
+
 ## 重新编译
 
-源码在 `src/`，需要 `D:\\\\Mingw64\\\\bin` 下的 `g++` 与 `windres`：
+源码在 `src/`，默认需要 `D:\Mingw64\bin` 下的 `g++` 与 `windres`（可用 `-MingwBin` 改）：
 
 ```powershell
-pwsh -File src\\\\build.ps1
+pwsh -File src\build.ps1                  # 只编译，输出到仓库根目录
+pwsh -File src\build.ps1 -OutDir dist     # 输出到 dist\（不覆盖正在运行的旧 exe）
+pwsh -File src\build.ps1 -Test -Werror    # 编译 + 单测；警告即错误
+pwsh -File src\build.ps1 -Sign            # 编译 + 签名
 ```
 
-编译产物会覆盖根目录的 `ip-float.exe`。构建开了 `-Wall -Wextra`，**应当零警告**；
-真出警告了先修，别习惯性忽略。
+* **默认不签名**：构建不应该有“创建根证书”这种副作用；签名是显式步骤。
+* `-Test` 会编译并运行 `tests\test_ipinfo.cpp`，覆盖 JSON 转义/代理对、ipinfo/ipapi 解析、
+  `ShortAsn`、`Ago`、URL host 等纯逻辑。
+* 版本号在 `src/version.h`，资源文件的 `VERSIONINFO` 和 User-Agent 共用；
+  exe 带 manifest（PerMonitorV2、asInvoker、longPathAware）。
+* 构建开了 `-Wall -Wextra`，**应当零警告**；发布/CI 建议加 `-Werror`。
 
 ## 「打开文件 - 安全警告」/「Windows 已保护你的电脑」弹窗
 
@@ -103,6 +156,8 @@ pwsh -File src\\\\build.ps1
 * 想改回来：把值改成 `"Warn"`（系统默认），或直接删掉这个值。
 * **别改错键**：`HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\SmartScreen\EnableSmartScreen`
   是**另一套**东西（Defender / Edge 的 SmartScreen 策略），对这个弹窗没有作用。
+* **这是整机级降级**：关掉后所有未知 exe 都不再被拦。只在自己清楚风险的开发机上这么做；
+  给别人的分发包不要建议这一步。
 
 ### 第二层：附件管理器「打开文件 - 安全警告」
 
@@ -119,6 +174,10 @@ pwsh -File src\\\\build.ps1
 
 > 注意这和 SmartScreen 恰好相反：**自签名对附件管理器有效，对 SmartScreen 无效。**
 
+`sign.ps1` 新建证书时默认 **私钥不可导出（NonExportable）**、有效期 5 年。
+已有的旧证书如果私钥可导出，脚本会提示；跑一次 `pwsh -File src\sign.ps1 -RecreateCert`
+即可换成新证书（旧证书签名失效，重编后重新签名即可）。
+
 **② 把 `.exe` 加进低风险包含列表**
 
 ```
@@ -131,11 +190,15 @@ pwsh -File src\\\\build.ps1
 （界面等价物：gpedit → 用户配置 → 管理模板 → Windows 组件 → 附件管理器 →
 「低风险文件类型的包含列表」→ 填 `.exe`。）
 
+> **这同样是整机级设置**：它让所有下载的 exe 都不再提示。只想解决一个文件时，
+> 优先用 `Unblock-File <exe>`（针对单个文件的 MOTW）；要改回来就删掉
+> `LowRiskFileTypes` 这个值（或把 `.exe` 从列表里去掉）。
+
 **③ 重启资源管理器（这一步最关键，也最容易漏）**
 
 `LowRiskFileTypes` 是**策略值，Explorer 只在启动时读一次**。
 本机就是卡在这里：值写进去了，但 Explorer 从早上开机后一直没重启，
-于是看起来"完全没效果"。
+于是看起来“完全没效果”。
 
 任务管理器（`Ctrl+Shift+Esc`）→ 找到「Windows 资源管理器」→ 右键 →「重新启动」。
 之后再双击就正常了。
@@ -147,7 +210,7 @@ pwsh -File src\\\\build.ps1
 
 | 方法 | 为什么没用 |
 |---|---|
-| 只清 MOTW（`Unblock-File`） | 这个 exe 本来就没有 `Zone.Identifier`；此弹窗不是 MOTW 触发的 |
+| 只清 MOTW（`Unblock-File`） | 如果 exe 来自 Releases，清掉 MOTW 只解决附件管理器这一层的一部分；SmartScreen 仍按哈希判定 |
 | Defender 排除项（文件夹 / exe） | 跟 SmartScreen、附件管理器都是彼此独立的机制 |
 | 改 `...\Defender\SmartScreen\EnableSmartScreen` | 改错键了，对这个弹窗无效 |
 | 改完注册表不重启 Explorer | 策略值不会被读到，看起来像"无效" |
@@ -155,34 +218,43 @@ pwsh -File src\\\\build.ps1
 
 ### 重编之后
 
-`build.ps1` 默认在编译完成后调用 `sign.ps1` 自动重新签名（`-NoSign` 可关掉）。
-证书已在 `CurrentUser\Root` 受信任的情况下，这一步**不需要管理员权限**。
+`build.ps1` 默认只编译；加 `-Sign` 才会调用 `sign.ps1`。
+证书已在 `CurrentUser\Root` 受信任的情况下，签名这一步**不需要管理员权限**。
 
 ## 网站素材
 
 `.site-assets/` 是给个人网站 `project-ip-float.html` 生成截图素材的工具，跟 exe 本身无关：
 
 ```powershell
-python .site-assets\generate.py            # 抓屏 + 合成 → .site-assets\out\
-python .site-assets\validate.py            # 校验站点页面是否符合该站既有约定
+python .site-assets\generate.py
+python .site-assets\validate.py --site-root ..\jiqinghuang.github.io
 ```
 
-`generate.py` 用 exe 自带的自检模式（`--demo --shot` / `--shot-dlg`）抓屏，再把桌面像素
-清干净、扣出真正的圆角透明区域；产物拷到站点仓库的 `assets/ip-float/`。
-两个脚本的文档字符串里写了为什么必须"先把不透明度设成 100"等三个坑。
+`generate.py` 用 exe 自带的自检模式：
+
+* 卡片走 `--render`：离屏渲染，**不再依赖“先把不透明度设成 100”**，也不受桌面壁纸/DPI 影响；
+  几何和配色从 sidecar `.json` 读，C++ 和 Python 不再各存一份半径/颜色常量。
+* 设置窗口走 `--demo --shot-dlg`：仍然需要屏幕抓图来保留 Win11 的圆角和标题栏，
+  所以裁边那一步假设**桌面是浅色**的；深色壁纸请先换一张浅色壁纸再跑。
+* 两次都传 `--ini build\ip-float.ini`，配置完全隔离，不会读写 `%APPDATA%` 里的真实配置。
+
+产物在 `.site-assets\out\`（4 个文件），拷到站点仓库的 `assets/ip-float/`。
+依赖 Pillow：`pip install pillow`。
 
 ## 已知限制
 
 * 走 Windows **schannel**（WinHTTP）。如果网络里有中间人/企业代理导致证书校验失败，
-会看到 `12175/12182/12185` 之类的错误码 —— 这类环境需要换用 OpenSSL 栈的客户端。
+  会看到 `12175/12182/12185` 之类的错误码 —— 这类环境需要换用 OpenSSL 栈的客户端。
 * 每 N 分钟会向 ipinfo.io / ipapi.co 发一次请求，等于把出口 IP 报给第三方；介意就调大间隔或换自建源。
 * exe 是**自签名**的：证书放在本机 `CurrentUser\Root`，**只对这个账户有效**。
   换机器 / 换用户后弹窗会回来 —— 用 `pwsh -File src\sign.ps1 -ExportCer` 导出 `.cer`，
   在那台机器上双击安装到「当前用户 → 受信任的根证书颁发机构」即可。
-* 双击弹窗的两层拦截与处理办法见上文专节；`build.ps1` 重编后会自动重新签名。
-* 仓库已接上 git（`origin` = `https://github.com/jiqinghuang/ip-float.git`）；改源码时顺手多提交几次，
-  别攒成一个大 commit —— 出问题才有得回退。
+* 自签名证书的私钥默认不可导出；如果旧证书是可导出的，建议 `-RecreateCert` 重建。
+* 双击弹窗的两层拦截与处理办法见上文专节；`build.ps1 -Sign` 重编后会自动重新签名。
+* 设置窗口是模态的，拖到另一块不同 DPI 的屏幕上不会重新排版（卡片本身会）；
+  窗口默认贴在卡片旁边打开，正常使用不会碰到。
+* 仓库已接上 git（`origin` = `https://github.com/jiqinghuang/ip-float.git`）；
+  改源码时顺手多提交几次，别攒成一个大 commit —— 出问题才有得回退。
 * **`ip-float.exe` 不进仓库**：分发走 [GitHub Releases](https://github.com/jiqinghuang/ip-float/releases/latest)，
-  下载链接固定为 `/releases/latest`，不再随文件名或路径变化。重编一次哈希就变一次，把 700 KB 的二进制
-  反复写进 git 历史没有意义。`build.ps1` 照旧把产物生成在仓库根目录，只是它已被 `.gitignore` 忽略。
-
+  下载链接固定为 `/releases/latest`。重编一次哈希就变一次，把 800 KB 的二进制反复写进 git
+  历史没有意义。`build.ps1` 默认输出到仓库根目录，但 `dist/` 和 `ip-float.exe` 都被忽略。
