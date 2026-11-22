@@ -3,10 +3,13 @@
 # 本机 core.autocrlf=true：缺这份文件时，checkout 出来的文本会被转成 CRLF，
 # 于是出现「一个字没改却显示已修改」的 phantom diff。
 *.cpp      text eol=lf
+*.h        text eol=lf
 *.py       text eol=lf
 *.rc       text eol=lf
 *.ps1      text eol=lf
 *.md       text eol=lf
+*.yml      text eol=lf
+*.manifest text eol=lf
 .gitattributes text eol=lf
 .gitignore     text eol=lf
 
@@ -14,3 +17,4 @@
 *.exe binary
 *.ico binary
 *.png binary
+*.cer binary
