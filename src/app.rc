@@ -1,11 +1,9 @@
-#include "version.h"
-
 1 ICON "app.ico"
 1 24 "app.manifest"
 
 1 VERSIONINFO
-FILEVERSION IPFLOAT_VERSION_MAJOR,IPFLOAT_VERSION_MINOR,IPFLOAT_VERSION_PATCH,IPFLOAT_VERSION_BUILD
-PRODUCTVERSION IPFLOAT_VERSION_MAJOR,IPFLOAT_VERSION_MINOR,IPFLOAT_VERSION_PATCH,IPFLOAT_VERSION_BUILD
+FILEVERSION 3,1,0,0
+PRODUCTVERSION 3,1,0,0
 FILEFLAGSMASK 0x3fL
 FILEFLAGS 0x0L
 FILEOS 0x00040004L
@@ -18,11 +16,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "ip-float"
             VALUE "FileDescription", "Exit IP floating card"
-            VALUE "FileVersion", IPFLOAT_VERSION_A
+            VALUE "FileVersion", "3.1.0"
             VALUE "InternalName", "ip-float"
             VALUE "OriginalFilename", "ip-float.exe"
             VALUE "ProductName", "ip-float"
-            VALUE "ProductVersion", IPFLOAT_VERSION_A
+            VALUE "ProductVersion", "3.1.0"
         END
     END
     BLOCK "VarFileInfo"

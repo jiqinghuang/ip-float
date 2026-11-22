@@ -127,7 +127,8 @@ pwsh -File src\build.ps1 -Sign            # 编译 + 签名
 * **默认不签名**：构建不应该有“创建根证书”这种副作用；签名是显式步骤。
 * `-Test` 会编译并运行 `tests\test_ipinfo.cpp`，覆盖 JSON 转义/代理对、ipinfo/ipapi 解析、
   `ShortAsn`、`Ago`、URL host 等纯逻辑。
-* 版本号在 `src/version.h`，资源文件的 `VERSIONINFO` 和 User-Agent 共用；
+* 版本号在 `src/version.h`（代码 / User-Agent）；`src/app.rc` 的 `VERSIONINFO` 里还有一份
+  字面版本号，发版时一起改。
   exe 带 manifest（PerMonitorV2、asInvoker、longPathAware）。
 * 构建开了 `-Wall -Wextra`，**应当零警告**；发布/CI 建议加 `-Werror`。
 
