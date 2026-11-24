@@ -30,7 +30,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)                 # ip-float 仓库根目录
 BUILD, OUT = os.path.join(HERE, "build"), os.path.join(HERE, "out")
 
-RENDER_SCALE = 2      # 2x 素材，与原图 680x132 一致
+RENDER_SCALE = 2      # 2x 素材；卡片 340x80 -> 680x160
 LIGHT = 100           # 设置窗口裁边：只对屏幕抓图有效，假设桌面是浅色
 
 
