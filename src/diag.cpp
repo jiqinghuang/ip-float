@@ -81,17 +81,32 @@ bool ProbeV6Tcp(const wchar_t* addr, int port, int timeoutMs)
 }
 
 // DNS 解析器出口：一次本地 DNS 查询；解析器不在出口时再查一次它的归属。
+// DnsQuery 的状态码翻成人话：光给数字没人知道该不该管
+std::wstring DnsErrorText(long code)
+{
+    switch (code) {
+        case 9501: return L"解析器返回了空应答（9501）—— 常见于刚切换 TUN 的瞬间";
+        case 9003: return L"域名不存在（9003）";
+        case 9002: return L"解析器故障（9002）";
+        case 1460: return L"查询超时（1460）";
+        default:   return L"错误码 " + std::to_wstring(code);
+    }
+}
+
 void ProbeDns(ProbeInput& out)
 {
-    // 这一项失败就整行标"未检测"，代价太高，所以偶发失败重试一次
+    // 这一项失败就整行变灰，代价太高。而且失败常发生在"刚切网络"的瞬间：
+    // 那时解析器会返回空应答（9501），立刻重试会撞上同一个坏状态，所以要间隔一下。
     DNS_STATUS st = 0;
     std::wstring rip;
-    for (int attempt = 0; attempt < 2 && rip.empty(); ++attempt)
+    for (int attempt = 0; attempt < 3 && rip.empty(); ++attempt) {
+        if (attempt) Sleep(250);
         rip = QueryResolverIp(st);
+    }
 
     if (rip.empty()) {
         out.dnsChecked = true;                 // 查了，只是没查到 —— 不是"跳过"
-        out.dnsError = L"DnsQuery 失败，错误码 " + std::to_wstring((long)st);
+        out.dnsError = L"DnsQuery 无结果：" + DnsErrorText((long)st);
         return;
     }
 

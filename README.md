@@ -270,6 +270,9 @@ python .site-assets\validate.py --site-root ..\jiqinghuang.github.io
 * **WinHTTP 处理 IPv6 字面量有缺陷**：带方括号时 `WinHttpConnect` 成功但 `SendRequest` 报
   `12029`，去掉方括号直接 `12005`。所以 IPv6 只做 TCP 连通测试（不取响应内容），
   报告里写的是「可走通」而不是出口 IP。
+* **DNS 那一项偶尔会显示「解析器返回了空应答（9501）」**：通常发生在刚切换 TUN 的瞬间
+  （sing-box / Clash 的 DNS 后端还没就绪，回了空记录）。它已经带间隔重试三次，多数情况下自愈；
+  如果持续出现，那是你本地解析器真的不给 `whoami.akamai.net` 这条记录，不是隧道的问题。
 * 徽章的灰点分两种：**空心 ○ = 当前配置下不适用**（比如没开隧道时问「隧道接管了吗」），
   **实心灰 ● = 测了但没测到**。两者绝不能混为一谈，否则健康状态看起来像探测失败。
 * 走 Windows **schannel**（WinHTTP）。如果网络里有中间人/企业代理导致证书校验失败，
