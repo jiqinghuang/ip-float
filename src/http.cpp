@@ -62,7 +62,8 @@ std::wstring WinHttpErrorText(DWORD code)
     default: break;
     }
     wchar_t buf[160] = {};
-    if (hint) swprintf(buf, 160, L"%u：%s", (unsigned)code, hint);
+    // 注意 %ls：MinGW 的 swprintf 是 C99 语义，%s 期待 char*，传 wchar_t* 会得到乱码
+    if (hint) swprintf(buf, 160, L"%u：%ls", (unsigned)code, hint);
     else      swprintf(buf, 160, L"%u", (unsigned)code);
     return buf;
 }
@@ -91,7 +92,7 @@ std::wstring CodeText(const wchar_t* what, DWORD code)
 
 } // namespace
 
-bool HttpGet(const std::wstring& url, std::string& body, std::wstring& err)
+bool HttpGet(const std::wstring& url, std::string& body, std::wstring& err, int timeoutMs)
 {
     body.clear();
     err.clear();
@@ -132,7 +133,8 @@ bool HttpGet(const std::wstring& url, std::string& body, std::wstring& err)
         err = CodeText(L"WinHttpOpen 失败", GetLastError());
         return false;
     }
-    WinHttpSetTimeouts(session.get(), kTimeoutMs, kTimeoutMs, kTimeoutMs, kTimeoutMs);
+    const DWORD tmo = timeoutMs > 0 ? (DWORD)timeoutMs : kTimeoutMs;
+    WinHttpSetTimeouts(session.get(), tmo, tmo, tmo, tmo);
 
     WinHttpHandle conn(WinHttpConnect(session.get(), host.c_str(), uc.nPort, 0));
     if (!conn) {
