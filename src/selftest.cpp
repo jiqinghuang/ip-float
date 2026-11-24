@@ -47,6 +47,8 @@ bool RenderDemoCard(const std::wstring& path, float scale, std::wstring& err)
     in.v6.ip = d.info.ip;
     in.dnsChecked = true;
     in.dnsResolverIp = L"1.1.1.1";
+    in.dnsResolverCountry = L"US";      // 和示例出口同国，徽章才是绿的
+    in.dnsResolverOrg = L"Cloudflare";
 
     Diagnosis diag = Diagnose(in);
     t.badges = BuildBadges(diag);

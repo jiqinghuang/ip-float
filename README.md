@@ -15,7 +15,7 @@ AS20473 Vultr · 2分钟前
 
 |路径|说明|
 |-|-|
-|**`ip-float.exe`**|★ 成品（当前 **v3.1.0**，约 905 KB）。单文件、双击即开、零运行时依赖。**不进 git**，分发走 [Releases](https://github.com/jiqinghuang/ip-float/releases/latest)|
+|**`ip-float.exe`**|★ 成品（当前 **v3.2.0**，约 940 KB）。单文件、双击即开、零运行时依赖。**不进 git**，分发走 [Releases](https://github.com/jiqinghuang/ip-float/releases/latest)|
 |`src/`|C++ 源码（按职责拆分）+ 图标 + `build.ps1` / `sign.ps1`|
 |`tests/`|纯逻辑单测（`build.ps1 -Test`）|
 |`.site-assets/`|网站素材生成 / 站点页面校验|
@@ -72,16 +72,20 @@ ip-float.exe --ini D:\tmp\ip-float.ini           # 固定用某份配置
 
 ```powershell
 ip-float.exe --render out\card.png --render-scale 2   # 离屏渲染卡片（不联网、不建窗、不读写配置）
+ip-float.exe --diag out\diag.txt                      # 出口体检报告（.txt + .json），不建窗口
 ip-float.exe --demo --shot out\card-screen.png        # 屏幕抓图 smoke test（演示数据）
 ip-float.exe --demo --shot-dlg out\dlg.png            # 设置窗口抓图
 ```
 
 * `--render` 直接画进 32bpp 位图，输出自带透明圆角，**不依赖桌面、壁纸、不透明度或屏幕 DPI**；
   同时写 `card.png.json`（width/height/scale/cornerRadius/colors）和 `card.png.log`。
-  `--render-scale 2` 是 2x（680×132），默认也是 2。
+  `--render-scale 2` 是 2x（680×160），默认也是 2。
+* `--diag` 跑的是诊断窗口那套判定的同一个 `Diagnose()`：本机事实、v4/v6 出口、时区一致性、
+  DNS 解析器。适合丢给 CI 或贴进 issue。**需要多久就等多久**（v4 出口 + v6 连通 + 解析器归属，
+  最长约 8 秒），失败项会在报告里写明原因，不会假装通过。
 * `--shot` 走真实的卡片窗口，默认用演示数据（不联网）；只有同时给 `--source` 才取真实数据。
   `--shot-dlg` 只拍设置窗口，永远用演示数据、不联网。
-* 两种自检都**只读配置、不写回**（不会改你的位置/间隔/数据源）；也都不受单实例限制。
+* 这几种自检都**只读配置、不写回**（不会改你的位置/间隔/数据源）；也都不受单实例限制。
   一次只能拍一个。
 * `--shot` 是屏幕抓图 smoke test，会受当前不透明度/桌面影响；给网页或文档用的干净素材
   请用 `--render`。`--shot-dlg` 拍的设置窗口本身不透明，不受不透明度影响。
@@ -252,6 +256,11 @@ python .site-assets\validate.py --site-root ..\jiqinghuang.github.io
 
 ## 已知限制
 
+* **WinHTTP 处理 IPv6 字面量有缺陷**：带方括号时 `WinHttpConnect` 成功但 `SendRequest` 报
+  `12029`，去掉方括号直接 `12005`。所以 IPv6 只做 TCP 连通测试（不取响应内容），
+  报告里写的是「可走通」而不是出口 IP。
+* 徽章的灰点分两种：**空心 ○ = 当前配置下不适用**（比如没开隧道时问「隧道接管了吗」），
+  **实心灰 ● = 测了但没测到**。两者绝不能混为一谈，否则健康状态看起来像探测失败。
 * 走 Windows **schannel**（WinHTTP）。如果网络里有中间人/企业代理导致证书校验失败，
   会看到 `12175/12182/12185` 之类的错误码 —— 这类环境需要换用 OpenSSL 栈的客户端。
 * 每 N 分钟会向 ipinfo.io / ipapi.co 发一次请求，等于把出口 IP 报给第三方；介意就调大间隔或换自建源。
@@ -265,5 +274,5 @@ python .site-assets\validate.py --site-root ..\jiqinghuang.github.io
 * 仓库已接上 git（`origin` = `https://github.com/jiqinghuang/ip-float.git`）；
   改源码时顺手多提交几次，别攒成一个大 commit —— 出问题才有得回退。
 * **`ip-float.exe` 不进仓库**：分发走 [GitHub Releases](https://github.com/jiqinghuang/ip-float/releases/latest)，
-  下载链接固定为 `/releases/latest`。重编一次哈希就变一次，把 905 KB 的二进制反复写进 git
+  下载链接固定为 `/releases/latest`。重编一次哈希就变一次，把 940 KB 的二进制反复写进 git
   历史没有意义。`build.ps1` 默认输出到仓库根目录，但 `dist/` 和 `ip-float.exe` 都被忽略。
