@@ -2,6 +2,7 @@
 
 #include "card.h"
 #include "config.h"
+#include "detail_dlg.h"
 #include "diag.h"
 #include "http.h"
 #include "ipinfo.h"
@@ -36,7 +37,6 @@ const UINT ID_TIMER_TRAY_RETRY = 6;
 const UINT WM_APP_FETCHED  = WM_APP + 1;
 const UINT WM_APP_TRAY     = WM_APP + 2;
 const UINT WM_APP_ACTIVATE = WM_APP + 3;   // 第二个实例让第一个把卡片亮出来
-const UINT WM_APP_DIAG     = WM_APP + 4;   // 网络诊断跑完了
 
 enum {
     IDM_REFRESH = 100,
@@ -68,6 +68,7 @@ struct FetchResult {
     std::wstring errFull;
     std::vector<Badge> badges;          // 卡片第三行
     Sev          verdict = Sev::Skip;
+    Diagnosis    diag;                  // 诊断窗口用的完整报告
 };
 
 struct App {
@@ -93,6 +94,8 @@ struct App {
     std::wstring lastErrFull;
     std::vector<Badge> badges;
     Sev          verdict = Sev::Skip;
+    Diagnosis    diag;
+    uint64_t     diagAt = 0;
 
     // 只有 UI 线程读写 busy；worker 不持有任何 App 指针，避免退出时 use-after-free
     std::atomic<bool> busy{ false };
@@ -140,6 +143,7 @@ unsigned __stdcall FetchThread(void* param)
     Diagnosis diag = Diagnose(in);
     result->badges = BuildBadges(diag);
     result->verdict = diag.verdict;
+    result->diag = diag;
 
     if (!PostMessageW(job->hwnd, WM_APP_FETCHED, 0, (LPARAM)result)) {
         // 窗口已经销毁（进程正在退出）：结果没人要了。
@@ -172,31 +176,19 @@ void StartFetch(App& app)
     }
 }
 
-void StartDiag(App& app)
+// 诊断窗口只负责显示；数据来自与卡片同一轮的抓取，所以不需要额外请求
+void PersistConfig(App& app);   // 定义在后面
+
+void OpenDiagWindow(App& app)
 {
-    struct Job { HWND hwnd = nullptr; };
-
-    auto* job = new Job();
-    job->hwnd = app.hwnd;
-
-    auto body = [](void* param) -> unsigned {
-        std::unique_ptr<Job> j((Job*)param);
-        struct Result {
-            bool         ok = false;
-            std::wstring path;
-            std::wstring err;
-        };
-        auto* r = new Result();
-        // 写在 exe 旁边：受限环境下 APPDATA / TEMP 可能写不进去
-        r->path = ExeDir() + L"\\ip-float-diag.txt";
-        r->ok = RunDiag(r->path, r->err);
-        if (!PostMessageW(j->hwnd, WM_APP_DIAG, 0, (LPARAM)r)) delete r;
-        return 0;
-    };
-
-    HANDLE t = (HANDLE)_beginthreadex(nullptr, 0, body, job, 0, nullptr);
-    if (t) CloseHandle(t);
-    else delete job;
+    ShowDiagWindow(app.hwnd, app.diag, app.diagAt);
+    if (!app.cfg.panelOpen) {
+        app.cfg.panelOpen = true;
+        PersistConfig(app);
+    }
+    // 窗口先显示上次结果，同时后台跑一轮新的
+    SetDiagBusy(true);
+    StartFetch(app);
 }
 
 void PersistConfig(App& app)
@@ -502,6 +494,8 @@ void AppOnFetched(App& app, FetchResult* r)
         }
         app.badges = r->badges;
         app.verdict = r->verdict;
+        app.diag = r->diag;
+        app.diagAt = NowFileTime();
         delete r;
     }
 
@@ -511,6 +505,9 @@ void AppOnFetched(App& app, FetchResult* r)
     }
 
     InvalidateRect(app.hwnd, nullptr, FALSE);
+
+    if (DiagWindowOpen())
+        UpdateDiagWindow(app.diag, app.diagAt);
 
     if (!app.opt.shotPath.empty() && !app.shotDone) {
         app.shotDone = true;
@@ -588,22 +585,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         return 0;
 
-    case WM_APP_DIAG: {
-        struct Result {
-            bool         ok = false;
-            std::wstring path;
-            std::wstring err;
-        };
-        std::unique_ptr<Result> r((Result*)lp);
-        if (!r) return 0;
-        if (r->ok) {
-            ShellExecuteW(nullptr, L"open", r->path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-        } else {
-            std::wstring msg = L"网络诊断失败：\n" + r->err;
-            MessageBoxW(hwnd, msg.c_str(), L"网络诊断", MB_ICONWARNING | MB_OK);
-        }
+    case WM_DIAG_REFRESH:
+        SetDiagBusy(true);
+        StartFetch(*app);
         return 0;
-    }
+
+    case WM_DIAG_CLOSED:
+        app->cfg.panelOpen = false;
+        PersistConfig(*app);
+        return 0;
 
     case WM_APP_FETCHED:
         AppOnFetched(*app, (FetchResult*)lp);
@@ -639,7 +629,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         } else if (id == IDM_SETTINGS) {
             ShowSettings(*app);
         } else if (id == IDM_DIAG) {
-            StartDiag(*app);
+            OpenDiagWindow(*app);
         } else if (id == IDM_COPY) {
             CopyIp(*app);
         } else if (id == IDM_TOPMOST) {
@@ -681,6 +671,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
 
     case WM_DESTROY:
+        CloseDiagWindow();
         SavePosition(*app);
         PersistConfig(*app);
         TrayRemove(app->tray);
@@ -818,6 +809,8 @@ int RunApp(const AppOptions& opt)
         StartFetch(app);
         ResetRefreshTimer(app);
         SetTimer(hwnd, ID_TIMER_TICK, 30000, nullptr);
+        // 上次退出时诊断窗口是开着的 —— 恢复它，数据跟着本轮抓取填进来
+        if (app.cfg.panelOpen) ShowDiagWindow(hwnd, app.diag, app.diagAt);
     }
 
     MSG msg;

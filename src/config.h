@@ -9,6 +9,7 @@ struct Config {
     bool         autoStart       = false;
     int          x               = -1;
     int          y               = -1;
+    bool         panelOpen       = false;   // 上次退出时诊断窗口是开着还是关着
     std::wstring source;          // 空 = 用内置的 ipinfo/ipapi 双源
 
     // x / y == -1 表示还没摆过，由 ApplyLayout 放到右上角。

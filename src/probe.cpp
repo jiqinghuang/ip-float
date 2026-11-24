@@ -14,6 +14,18 @@ int Rank(Sev s)
 
 Sev Worst(Sev a, Sev b) { return Rank(b) > Rank(a) ? b : a; }
 
+// 公共 anycast 解析器的属地经常和出口国对不上，不能当成「漏」
+bool IsWellKnownResolver(const std::wstring& org)
+{
+    static const wchar_t* kNames[] = {
+        L"Cloudflare", L"Google", L"Quad9", L"OpenDNS", L"Cisco",
+        L"AdGuard", L"NextDNS", L"Hurricane Electric", L"Neustar"
+    };
+    for (const wchar_t* n : kNames)
+        if (org.find(n) != std::wstring::npos) return true;
+    return false;
+}
+
 // 480 -> "+8"，-300 -> "-5"，330 -> "+5:30"
 std::wstring HoursText(int minutes)
 {
@@ -151,12 +163,25 @@ Diagnosis Diagnose(const ProbeInput& in)
     }
 
     // ── DNS ──────────────────────────────────────────────────────────
-    if (!in.dnsChecked) {
-        Push(d, LineId::Dns, L"DNS", L"未检测", Sev::Skip);
+    if (!in.dnsChecked || in.dnsResolverIp.empty()) {
+        Push(d, LineId::Dns, L"DNS", L"未检测", Sev::Skip,
+             in.dnsChecked ? L"解析器地址查询失败" : std::wstring());
+    } else if (!v4.ok) {
+        Push(d, LineId::Dns, L"DNS", in.dnsResolverIp, Sev::Skip);
+    } else if (in.dnsResolverIp == v4.ip) {
+        Push(d, LineId::Dns, L"DNS", L"与出口同源", Sev::Ok, in.dnsResolverIp);
+    } else if (in.dnsResolverCountry.empty()) {
+        Push(d, LineId::Dns, L"DNS", in.dnsResolverIp, Sev::Skip, L"无法查该解析器的归属");
+    } else if (!v4.country.empty() && in.dnsResolverCountry == v4.country) {
+        Push(d, LineId::Dns, L"DNS", L"与出口同国", Sev::Ok,
+             in.dnsResolverIp + L"（" + in.dnsResolverCountry + L"）");
+    } else if (IsWellKnownResolver(in.dnsResolverOrg)) {
+        // Cloudflare / Google 这类是 anycast，属地常和出口对不上，不算矛盾
+        Push(d, LineId::Dns, L"DNS", L"公共解析器", Sev::Ok,
+             in.dnsResolverOrg + L"  " + in.dnsResolverIp);
     } else {
-        Push(d, LineId::Dns, L"DNS",
-             in.dnsResolverIp.empty() ? L"未知" : in.dnsResolverIp, Sev::Ok,
-             L"解析器出口地址");
+        Push(d, LineId::Dns, L"DNS", L"出口与 IP 不同国", Sev::Warn,
+             in.dnsResolverIp + L"（" + in.dnsResolverCountry + L"）—— 查询可能没走隧道");
     }
 
     // ── 总判定 ───────────────────────────────────────────────────────

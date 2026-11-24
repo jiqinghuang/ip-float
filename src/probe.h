@@ -40,6 +40,8 @@ struct ProbeInput {
     ExitProbe    v6;
     bool         dnsChecked = false;
     std::wstring dnsResolverIp;
+    std::wstring dnsResolverCountry;   // 解析器出口 IP 的归属国（可能为空）
+    std::wstring dnsResolverOrg;       // 解析器出口 IP 的运营商，用来识别公共 DNS
 };
 
 struct Diagnosis {

@@ -51,7 +51,7 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 $sources = @(
     'main.cpp', 'app.cpp', 'config.cpp', 'http.cpp', 'ipinfo.cpp',
-    'card.cpp', 'settings_dlg.cpp', 'tray.cpp', 'selftest.cpp', 'util.cpp',
+    'card.cpp', 'settings_dlg.cpp', 'detail_dlg.cpp', 'tray.cpp', 'selftest.cpp', 'util.cpp',
     'netinfo.cpp', 'probe.cpp', 'diag.cpp'
 ) | ForEach-Object { Join-Path $here $_ }
 
@@ -71,7 +71,7 @@ try {
 
     & $gpp -std=gnu++17 -O2 -DUNICODE -D_UNICODE @warn -mwindows -static -static-libgcc -static-libstdc++ `
         -o $exe $sources (Join-Path $here 'app.res.o') `
-        -lgdiplus -lwinhttp -lshell32 -luser32 -lgdi32 -lole32 -liphlpapi -lws2_32
+        -lgdiplus -lwinhttp -lshell32 -luser32 -lgdi32 -lole32 -liphlpapi -lws2_32 -ldwmapi -ldnsapi
     if ($LASTEXITCODE -ne 0) { throw "编译失败（exit $LASTEXITCODE）" }
 
     Unblock-File -LiteralPath $exe -ErrorAction SilentlyContinue

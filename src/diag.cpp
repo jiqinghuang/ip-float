@@ -1,6 +1,9 @@
 #include "diag.h"
 
+// winsock2.h 必须先于 windows.h；windns.h 依赖 winsock 类型
+#include <winsock2.h>
 #include <windows.h>
+#include <windns.h>
 
 #include <string>
 #include <vector>
@@ -20,6 +23,28 @@ const wchar_t* kUrlGeo = L"https://ipwho.is/";
 // v6 出口：用 IPv6 字面量直连 Cloudflare，绕过 DNS，纯粹测「v6 目的地能不能走通、出口是谁」。
 // 1.1.1.1 的证书里有 2606:4700:4700::1111 的 IP SAN，TLS 校验没问题。
 const wchar_t* kUrlV6  = L"https://[2606:4700:4700::1111]/cdn-cgi/trace";
+
+// 用 Akamai 的 whoami 反查「我这台机器的 DNS 解析器出口 IP」：
+// whoami.akamai.net 的 A 记录是按查询来源应答的，返回的就是递归解析器的地址。
+std::wstring QueryResolverIp()
+{
+    DNS_RECORDW* rec = nullptr;
+    const DNS_STATUS st = DnsQuery_W(L"whoami.akamai.net", DNS_TYPE_A,
+                                     DNS_QUERY_BYPASS_CACHE, nullptr, &rec, nullptr);
+    if (st != 0 || !rec) return std::wstring();
+
+    std::wstring ip;
+    const ULONG addr = rec->Data.A.IpAddress;     // 网络字节序
+    const unsigned char* p = (const unsigned char*)&addr;
+    if (p[0] != 0) {
+        wchar_t buf[24] = {};
+        swprintf(buf, 24, L"%u.%u.%u.%u", (unsigned)p[0], (unsigned)p[1],
+                 (unsigned)p[2], (unsigned)p[3]);
+        ip = buf;
+    }
+    DnsRecordListFree(rec, DnsFreeRecordList);
+    return ip;
+}
 
 std::wstring Trim(const std::wstring& s)
 {
@@ -200,6 +225,27 @@ bool ProbeExits(const IpInfo& base, ProbeInput& out)
         std::wstring err;
         if (HttpGet(kUrlV6, body, err, 3000)) ParseTrace(body, out.v6);
         else out.v6.err = err;
+    }
+
+    // DNS 解析器出口：只多一次本地 DNS 查询；解析器不在出口时再查一次归属
+    {
+        const std::wstring rip = QueryResolverIp();
+        if (!rip.empty()) {
+            out.dnsChecked = true;
+            out.dnsResolverIp = rip;
+            if (rip != out.v4.ip) {
+                std::string body;
+                std::wstring err;
+                if (HttpGet(L"https://ipwho.is/" + rip, body, err, 3000)) {
+                    out.dnsResolverCountry = Utf8ToWide(JsonStr(body, "country_code"));
+                    if (out.dnsResolverCountry.empty())
+                        out.dnsResolverCountry = Utf8ToWide(JsonStr(body, "country"));
+                    out.dnsResolverOrg = Utf8ToWide(JsonStr(body, "org"));
+                    if (out.dnsResolverOrg.empty())
+                        out.dnsResolverOrg = Utf8ToWide(JsonStr(body, "isp"));
+                }
+            }
+        }
     }
 
     return true;

@@ -114,6 +114,7 @@ bool LoadConfig(const std::wstring& path, Config& cfg)
     s.autoStart       = GetPrivateProfileIntW(kSection, L"autoStart", 0, p) != 0;
     s.x               = (int)GetPrivateProfileIntW(kSection, L"x", -1, p);
     s.y               = (int)GetPrivateProfileIntW(kSection, L"y", -1, p);
+    s.panelOpen       = GetPrivateProfileIntW(kSection, L"panelOpen", 0, p) != 0;
 
     wchar_t src[2048] = {};
     GetPrivateProfileStringW(kSection, L"source", L"", src, 2048, p);
@@ -145,6 +146,7 @@ bool SaveConfig(const std::wstring& path, const Config& cfg)
     put(L"autoStart",       cfg.autoStart ? L"1" : L"0");
     put(L"x",               std::to_wstring(cfg.x));
     put(L"y",               std::to_wstring(cfg.y));
+    put(L"panelOpen",       cfg.panelOpen ? L"1" : L"0");
     put(L"source",          cfg.source);   // 空值 = 删除该键，恢复内置源
 
     return ok;
