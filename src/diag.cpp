@@ -2,6 +2,8 @@
 
 // winsock2.h 必须先于 windows.h；windns.h 依赖 winsock 类型
 #include <winsock2.h>
+#include <ws2tcpip.h>
+#include <ws2ipdef.h>
 #include <windows.h>
 #include <windns.h>
 
@@ -20,9 +22,6 @@ namespace {
 const wchar_t* kUrlV4  = L"https://ipv4.icanhazip.com";
 // 归属 / ASN / 时区偏移：ipwho.is 免费、无 key、HTTPS
 const wchar_t* kUrlGeo = L"https://ipwho.is/";
-// v6 出口：用 IPv6 字面量直连 Cloudflare，绕过 DNS，纯粹测「v6 目的地能不能走通、出口是谁」。
-// 1.1.1.1 的证书里有 2606:4700:4700::1111 的 IP SAN，TLS 校验没问题。
-const wchar_t* kUrlV6  = L"https://[2606:4700:4700::1111]/cdn-cgi/trace";
 
 // 用 Akamai 的 whoami 反查「我这台机器的 DNS 解析器出口 IP」：
 // whoami.akamai.net 的 A 记录是按查询来源应答的，返回的就是递归解析器的地址。
@@ -44,6 +43,41 @@ std::wstring QueryResolverIp()
     }
     DnsRecordListFree(rec, DnsFreeRecordList);
     return ip;
+}
+
+// v6 只测「能不能走通」：WinHTTP 对 IPv6 字面量支持有缺陷
+// （带括号 connect 成功但 send 报 12029，不带括号报 12005），
+// 所以这里直接开 TCP —— 我们关心的是隧道有没有承载 v6，不是拿响应内容。
+bool ProbeV6Tcp(const wchar_t* addr, int port, int timeoutMs)
+{
+    WSADATA wsa = {};
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return false;
+
+    bool ok = false;
+    SOCKET s = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
+    if (s != INVALID_SOCKET) {
+        sockaddr_in6 sa = {};
+        sa.sin6_family = AF_INET6;
+        sa.sin6_port = htons((u_short)port);
+        IN6_ADDR a = {};
+        if (InetPtonW(AF_INET6, addr, &a) == 1) {
+            memcpy(&sa.sin6_addr, &a, sizeof(a));
+            u_long nb = 1;
+            ioctlsocket(s, FIONBIO, &nb);      // 非阻塞 + select 超时
+            connect(s, (sockaddr*)&sa, sizeof(sa));
+            fd_set wr, ex;
+            FD_ZERO(&wr);
+            FD_ZERO(&ex);
+            FD_SET(s, &wr);
+            FD_SET(s, &ex);
+            timeval tv = { timeoutMs / 1000, (timeoutMs % 1000) * 1000 };
+            int r = select(0, nullptr, &wr, &ex, &tv);
+            ok = (r > 0 && FD_ISSET(s, &wr) && !FD_ISSET(s, &ex));
+        }
+        closesocket(s);
+    }
+    WSACleanup();
+    return ok;
 }
 
 // DNS 解析器出口：一次本地 DNS 查询；解析器不在出口时再查一次它的归属。
@@ -125,29 +159,6 @@ bool FillGeo(const std::string& json, ExitProbe& e)
     if (found) e.utcOffsetMinutes = (int)(off / 60);
 
     return !e.country.empty();
-}
-
-// Cloudflare /cdn-cgi/trace：每行 "key=value"
-bool ParseTrace(const std::string& body, ExitProbe& e)
-{
-    size_t p = 0;
-    while (p < body.size()) {
-        size_t nl = body.find('\n', p);
-        std::string line = (nl == std::string::npos) ? body.substr(p) : body.substr(p, nl - p);
-        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
-        size_t eq = line.find('=');
-        if (eq != std::string::npos) {
-            std::string k = line.substr(0, eq);
-            std::string v = line.substr(eq + 1);
-            if (k == "ip")       e.ip = Utf8ToWide(v);
-            else if (k == "loc") e.country = Utf8ToWide(v);
-        }
-        if (nl == std::string::npos) break;
-        p = nl + 1;
-    }
-    e.ok = !e.ip.empty();
-    if (!e.ok) e.err = L"响应里没有 ip 字段";
-    return e.ok;
 }
 
 bool WriteFileUtf8(const std::wstring& path, const std::wstring& text, bool bom)
@@ -242,13 +253,9 @@ bool ProbeExits(const IpInfo& base, ProbeInput& out)
         }
     }
 
-    // v6 出口：IP 字面量直连 CF（绕过 DNS），3s 超时——不能拖慢卡片刷新
-    {
-        std::string body;
-        std::wstring err;
-        if (HttpGet(kUrlV6, body, err, 3000)) ParseTrace(body, out.v6);
-        else out.v6.err = err;
-    }
+    // v6 目的地能不能走通（2s 超时，不拖慢卡片刷新）
+    out.v6.ok = ProbeV6Tcp(L"2606:4700:4700::1111", 443, 2000);
+    if (!out.v6.ok) out.v6.err = L"TCP 连接失败";
 
     ProbeDns(out);
 
@@ -291,14 +298,8 @@ bool RunDiag(const std::wstring& outPath, std::wstring& err)
     }
 
     // ── v6 出口 ──────────────────────────────────────────────────────
-    body.clear();
-    herr.clear();
-    if (HttpGet(kUrlV6, body, herr)) {
-        ParseTrace(body, in.v6);
-    } else {
-        in.v6.ok = false;
-        in.v6.err = herr;
-    }
+    in.v6.ok = ProbeV6Tcp(L"2606:4700:4700::1111", 443, 3000);
+    if (!in.v6.ok) in.v6.err = L"TCP 连接失败";
 
     ProbeDns(in);
 

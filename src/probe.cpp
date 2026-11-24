@@ -131,6 +131,10 @@ Diagnosis Diagnose(const ProbeInput& in)
             ? L"本机有公网 IPv6，但 v6 目的地不可达（被墙或运营商 v6 路由异常）"
             : L"v6 目标打不通；本机无公网 v6 时属正常";
         Push(d, LineId::ExitV6, L"IPv6 出口", L"不可达", Sev::Skip, note);
+    } else if (v6.ip.empty()) {
+        // 只做了连通测试（WinHTTP 处理 IPv6 字面量有缺陷，拿不到响应内容）
+        Push(d, LineId::ExitV6, L"IPv6 出口", L"可走通", Sev::Ok,
+             L"已建立 IPv6 连接；路由是否接管见上一节");
     } else if (v4.ok && !v6.ip.empty() && v6.ip != v4.ip) {
         Push(d, LineId::ExitV6, L"IPv6 出口", v6.ip, Sev::Bad,
              L"与 IPv4 出口 " + v4.ip + L" 不同源");

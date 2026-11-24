@@ -86,6 +86,8 @@ struct Adapter {
     bool         up = false;
     bool         hasGateway = false;
     bool         loopback = false;
+    bool         hasMac = false;   // 真实网卡才有 MAC；Wintun / DCO 这类虚拟网卡没有
+    ULONG        ifType = 0;
     std::wstring ipv4;
     std::wstring publicV6;
 };
@@ -115,7 +117,9 @@ bool LoadAdapters(std::vector<Adapter>& out, std::wstring& err)
         ad.friendly = a->FriendlyName ? a->FriendlyName : L"";
         ad.up = (a->OperStatus == IfOperStatusUp);
         ad.loopback = (a->IfType == IF_TYPE_SOFTWARE_LOOPBACK);
+        ad.ifType = a->IfType;
         ad.hasGateway = (a->FirstGatewayAddress != nullptr);
+        ad.hasMac = (a->PhysicalAddressLength >= 6);
 
         for (auto* ua = a->FirstUnicastAddress; ua; ua = ua->Next) {
             auto* sa = (SOCKADDR_INET*)ua->Address.lpSockaddr;
@@ -191,12 +195,25 @@ bool CollectNetFacts(NetFacts& out)
         return false;
     }
 
-    // 主物理网卡：UP、非回环、有默认网关
+    // 主物理网卡：UP、非回环、有默认网关、**有 MAC**。
+    // 关键是有 MAC —— TUN 网卡（Wintun/DCO）同样有网关，而且枚举顺序还在前面，
+    // 不靠 MAC 区分就会把 TUN 认成物理网卡，于是「路由没走物理网卡」永远为假。
     const Adapter* primary = nullptr;
     for (const auto& a : ads) {
-        if (!a.up || a.loopback || !a.hasGateway) continue;
-        primary = &a;
-        break;
+        if (!a.up || a.loopback || !a.hasGateway || a.if4 == 0 || !a.hasMac) continue;
+        if (a.ifType == IF_TYPE_IEEE80211 || a.ifType == IF_TYPE_ETHERNET_CSMACD) {
+            primary = &a;
+            break;
+        }
+        if (!primary) primary = &a;
+    }
+    if (!primary) {
+        // 极端环境（比如没有 MAC 的拨号网卡）：退回宽松条件，至少还能给出点什么
+        for (const auto& a : ads) {
+            if (!a.up || a.loopback || !a.hasGateway || a.if4 == 0) continue;
+            primary = &a;
+            break;
+        }
     }
     if (primary) {
         out.lanIp = primary->ipv4;

@@ -92,7 +92,8 @@ std::wstring CodeText(const wchar_t* what, DWORD code)
 
 } // namespace
 
-bool HttpGet(const std::wstring& url, std::string& body, std::wstring& err, int timeoutMs)
+bool HttpGet(const std::wstring& url, std::string& body, std::wstring& err,
+             int timeoutMs, bool direct)
 {
     body.clear();
     err.clear();
@@ -117,12 +118,18 @@ bool HttpGet(const std::wstring& url, std::string& body, std::wstring& err, int 
     }
 
     std::wstring host(hostBuf.data(), uc.dwHostNameLength);
+    // IPv6 字面量：WinHttpCrackUrl 给的是 "[2606:4700:4700::1111]"，
+    // WinHttpConnect 不认方括号，要去掉；留着会在 SendRequest 时 12029。
+    if (host.size() >= 2 && host.front() == L'[' && host.back() == L']')
+        host = host.substr(1, host.size() - 2);
     std::wstring path(pathBuf.data(), uc.dwUrlPathLength);
     if (path.empty()) path = L"/";
     const bool https = (uc.nScheme == INTERNET_SCHEME_HTTPS);
 
     std::wstring ua = L"ip-float/" IPFLOAT_VERSION_W;
-    WinHttpHandle session(WinHttpOpen(ua.c_str(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+    const DWORD accessType = direct ? WINHTTP_ACCESS_TYPE_NO_PROXY
+                                    : WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY;
+    WinHttpHandle session(WinHttpOpen(ua.c_str(), accessType,
                                       WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
     if (!session) {
         // Win7 / 早期 Win8 没有 AUTOMATIC_PROXY；退回系统默认代理设置
