@@ -25,7 +25,7 @@
 
 |路径|说明|
 |-|-|
-|**`ip-float.exe`**|★ 成品（当前 **v3.3.0**，约 963 KB）。单文件、双击即开、零运行时依赖。**不进 git**，分发走 [Releases](https://github.com/jiqinghuang/ip-float/releases/latest)|
+|**`ip-float.exe`**|★ 成品（当前 **v3.3.0**，约 969 KB）。单文件、双击即开、零运行时依赖。**不进 git**，分发走 [Releases](https://github.com/jiqinghuang/ip-float/releases/latest)|
 |`src/`|C++ 源码（按职责拆分）+ 图标 + `build.ps1` / `sign.ps1`|
 |`tests/`|纯逻辑单测（`build.ps1 -Test`）|
 |`.site-assets/`|网站素材生成 / 站点页面校验|
@@ -301,5 +301,5 @@ python .site-assets\validate.py --site-root ..\jiqinghuang.github.io
 * 仓库已接上 git（`origin` = `https://github.com/jiqinghuang/ip-float.git`）；
   改源码时顺手多提交几次，别攒成一个大 commit —— 出问题才有得回退。
 * **`ip-float.exe` 不进仓库**：分发走 [GitHub Releases](https://github.com/jiqinghuang/ip-float/releases/latest)，
-  下载链接固定为 `/releases/latest`。重编一次哈希就变一次，把约 963 KB 的二进制反复写进 git
+  下载链接固定为 `/releases/latest`。重编一次哈希就变一次，把约 969 KB 的二进制反复写进 git
   历史没有意义。`build.ps1` 默认输出到仓库根目录，但 `dist/` 和 `ip-float.exe` 都被忽略。

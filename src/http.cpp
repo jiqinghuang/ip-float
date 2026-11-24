@@ -149,6 +149,11 @@ bool HttpGet(const std::wstring& url, std::string& body, std::wstring& err,
     const DWORD tmo = timeoutMs > 0 ? (DWORD)timeoutMs : kTimeoutMs;
     WinHttpSetTimeouts(session.get(), tmo, tmo, tmo, tmo);
 
+    // WinHTTP 默认会自己重试连接（3 次），于是「设 3 秒超时」实际能跑 8 秒。
+    // 探测类请求靠这个参数控制总时长，隐式重试会让它彻底失真，所以关掉。
+    DWORD noRetry = 0;
+    WinHttpSetOption(session.get(), WINHTTP_OPTION_CONNECT_RETRIES, &noRetry, sizeof(noRetry));
+
     WinHttpHandle conn(WinHttpConnect(session.get(), host.c_str(), uc.nPort, 0));
     if (!conn) {
         err = CodeText(L"连接失败", GetLastError());

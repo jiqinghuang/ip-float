@@ -36,8 +36,10 @@ std::wstring Trim(const std::wstring& s);
 std::wstring QueryResolverIp(DNS_STATUS& status)
 {
     DNS_RECORDW* rec = nullptr;
+    // 不用 DNS_QUERY_BYPASS_CACHE：解析器地址很少变，走系统缓存能把每次 1.5 秒降到 0。
+    // 真变了也有 TTL 兜底，而且它只影响「DNS 那一行」的展示。
     status = DnsQuery_W(L"whoami.akamai.net", DNS_TYPE_A,
-                        DNS_QUERY_BYPASS_CACHE, nullptr, &rec, nullptr);
+                        0, nullptr, &rec, nullptr);
     if (status != 0 || !rec) return std::wstring();
 
     std::wstring ip;
@@ -97,38 +99,72 @@ bool IsIpv6Text(const std::wstring& s)
 
 // 优先取真实 IPv6 出口地址；取不到时退回原来的 TCP 连通测试。
 // 这两者要区分：有地址才能回答「v6 与 v4 是否同源」，只有连通性只能说「可走通」。
-bool ProbeV6Exit(ExitProbe& out, int timeoutMs)
+// key 描述「v6 出口这件事有没有可能变」：出口 IP + 隧道是否接管 v6 + 本机是否有公网 v6。
+// 只要这三样没变，上一轮的结论就仍然成立 —— 而失败一次要 4~8 秒（WinHTTP 的超时
+// 在 TUN 这条路上根本不生效，设 1.2s 实测能跑 7.5s），所以绝不每轮都去撞。
+bool ProbeV6Exit(ExitProbe& out, int budgetMs, const std::wstring& key)
 {
+    static std::wstring cachedKey;
+    static ExitProbe    cached;
+    static bool         haveCache = false;
+
+    if (haveCache && key == cachedKey) {
+        out = cached;
+        return out.ok;
+    }
+
     out.ok = false;
     out.ip.clear();
     out.err.clear();
+    if (budgetMs <= 0) budgetMs = 2000;
 
-    std::string body;
-    std::wstring err;
+    // 用「总预算」而不是「每个 URL 各自超时」：以前两个回显各给 2.5 秒，
+    // 而 WinHTTP 的一次失败实际要 4~8 秒，于是一轮白等十几秒。
+    const ULONGLONG t0 = GetTickCount64();
+    auto remaining = [&]() -> int {
+        const ULONGLONG used = GetTickCount64() - t0;
+        return used >= (ULONGLONG)budgetMs ? 0 : (int)(budgetMs - used);
+    };
+
     for (const wchar_t* url : kUrlV6) {
-        body.clear();
-        err.clear();
-        if (HttpGet(url, body, err, timeoutMs, /*direct=*/true, /*lenientTls=*/true)) {
+        const int left = remaining();
+        if (left <= 0) break;
+
+        std::string body;
+        std::wstring err;
+        if (HttpGet(url, body, err, left, /*direct=*/true, /*lenientTls=*/true)) {
             const std::wstring ip = Trim(Utf8ToWide(body));
             if (IsIpv6Text(ip)) {
                 out.ok = true;
                 out.ip = ip;
+                cachedKey = key;
+                cached = out;
+                haveCache = true;
                 return true;
             }
             out.err = L"响应不是 IPv6 地址";
         } else {
             out.err = err;
         }
+
+        // 慢失败 = 这条路被黑洞吞了。换一个同类回显只会同样慢，直接放弃。
+        if ((int)(GetTickCount64() - t0) >= budgetMs / 2) break;
     }
 
-    // HTTP 走不通（例如本机没有 v6）时，至少保留原来的连通性结论。
-    if (ProbeV6Tcp(L"2606:4700:4700::1111", 443, timeoutMs > 0 ? timeoutMs : 3000)) {
+    // 兜底：只测连通性（拿不到地址，但能区分「完全不通」和「能连但没回显」）。
+    // 注意 TUN 会在本地接住连接，所以这个结论只能说明"本地可达"。
+    const int left = remaining();
+    if (left > 0 && ProbeV6Tcp(L"2606:4700:4700::1111", 443, left < 1200 ? left : 1200)) {
         out.ok = true;
         out.ip.clear();
         out.err.clear();
         return true;
     }
     if (out.err.empty()) out.err = L"TCP 连接失败";
+
+    cachedKey = key;
+    cached = out;
+    haveCache = true;
     return false;
 }
 
@@ -166,6 +202,14 @@ void ProbeDns(ProbeInput& out)
     out.dnsResolverIp = rip;
     if (rip == out.v4.ip) return;
 
+    // 解析器地址很少变，查一次就够了：每次重查要多花 2~4 秒，失败时更久。
+    static std::wstring cachedIp, cachedCountry, cachedOrg;
+    if (!cachedIp.empty() && cachedIp == rip) {
+        out.dnsResolverCountry = cachedCountry;
+        out.dnsResolverOrg = cachedOrg;
+        return;
+    }
+
     std::string body;
     std::wstring err;
     if (!HttpGet(L"https://ipwho.is/" + rip, body, err, 3000)) return;
@@ -175,6 +219,12 @@ void ProbeDns(ProbeInput& out)
     out.dnsResolverOrg = Utf8ToWide(JsonStr(body, "org"));
     if (out.dnsResolverOrg.empty())
         out.dnsResolverOrg = Utf8ToWide(JsonStr(body, "isp"));
+
+    if (!out.dnsResolverCountry.empty()) {
+        cachedIp = rip;
+        cachedCountry = out.dnsResolverCountry;
+        cachedOrg = out.dnsResolverOrg;
+    }
 }
 
 std::wstring Trim(const std::wstring& s)
@@ -317,13 +367,25 @@ bool ProbeExits(const IpInfo& base, ProbeInput& out,
 
     // 时区偏移：数据源没给就问 ipwho.is（免费、无 key）。
     // 只取 offset / org，不覆盖已有的国家城市——那个 IP 可能是另一协议族的。
+    // 时区偏移只跟出口 IP 有关，同一个出口不必每轮重查（每次 1~3 秒）。
+    static std::wstring offsetIp;
+    static int          offsetValue = kNoOffset;
+    if (out.v4.ok && out.v4.utcOffsetMinutes == kNoOffset &&
+        !offsetIp.empty() && offsetIp == out.v4.ip) {
+        out.v4.utcOffsetMinutes = offsetValue;
+    }
+
     if (out.v4.ok && out.v4.utcOffsetMinutes == kNoOffset) {
         std::string body;
         std::wstring err;
         if (HttpGet(kUrlGeo, body, err, 3000)) {
             bool found = false;
             long long off = JsonInt(body, "offset", found);
-            if (found) out.v4.utcOffsetMinutes = (int)(off / 60);
+            if (found) {
+                out.v4.utcOffsetMinutes = (int)(off / 60);
+                offsetIp = out.v4.ip;
+                offsetValue = out.v4.utcOffsetMinutes;
+            }
             if (out.v4.org.empty()) out.v4.org = Utf8ToWide(JsonStr(body, "org"));
             if (out.v4.asn.empty()) {
                 long long asn = JsonInt(body, "asn", found);
@@ -334,7 +396,9 @@ bool ProbeExits(const IpInfo& base, ProbeInput& out,
 
     // v6 出口：优先取真实地址；取不到再退回连通性测试。
     // 2.5s 是后台诊断的超时，卡片 IP 不会被它阻塞（见 app.cpp 的两阶段抓取）。
-    ProbeV6Exit(out.v6, 2500);
+    ProbeV6Exit(out.v6, 2500,
+                out.v4.ip + L"|" + (out.facts.tunDefaultV6 ? L"1" : L"0") +
+                (out.facts.hasPublicV6 ? L"1" : L"0"));
 
     ProbeDns(out);
 
@@ -377,7 +441,9 @@ bool RunDiag(const std::wstring& outPath, std::wstring& err)
     }
 
     // ── v6 出口 ──────────────────────────────────────────────────────
-    ProbeV6Exit(in.v6, 3000);
+    ProbeV6Exit(in.v6, 3000,
+                in.v4.ip + L"|" + (in.facts.tunDefaultV6 ? L"1" : L"0") +
+                (in.facts.hasPublicV6 ? L"1" : L"0"));
 
     ProbeDns(in);
 
