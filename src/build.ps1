@@ -51,7 +51,8 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 $sources = @(
     'main.cpp', 'app.cpp', 'config.cpp', 'http.cpp', 'ipinfo.cpp',
-    'card.cpp', 'settings_dlg.cpp', 'tray.cpp', 'selftest.cpp', 'util.cpp'
+    'card.cpp', 'settings_dlg.cpp', 'tray.cpp', 'selftest.cpp', 'util.cpp',
+    'netinfo.cpp', 'probe.cpp', 'diag.cpp'
 ) | ForEach-Object { Join-Path $here $_ }
 
 $warn = @('-Wall', '-Wextra')
@@ -70,7 +71,7 @@ try {
 
     & $gpp -std=gnu++17 -O2 -DUNICODE -D_UNICODE @warn -mwindows -static -static-libgcc -static-libstdc++ `
         -o $exe $sources (Join-Path $here 'app.res.o') `
-        -lgdiplus -lwinhttp -lshell32 -luser32 -lgdi32 -lole32
+        -lgdiplus -lwinhttp -lshell32 -luser32 -lgdi32 -lole32 -liphlpapi -lws2_32
     if ($LASTEXITCODE -ne 0) { throw "编译失败（exit $LASTEXITCODE）" }
 
     Unblock-File -LiteralPath $exe -ErrorAction SilentlyContinue
@@ -82,29 +83,35 @@ try {
 }
 
 if ($Test) {
-    $testExe = Join-Path $OutDir 'test_ipinfo.exe'
-    # 日志写到 TEMP，避免默认 OutDir=仓库根目录时污染 git status
-    $outLog = Join-Path $env:TEMP 'ip-float-test-build.log'
-    $testArgs = @('-std=gnu++17', '-O2', '-DUNICODE', '-D_UNICODE') + $warn + @(
-        '-o', $testExe,
-        (Join-Path $root 'tests\test_ipinfo.cpp'),
-        (Join-Path $here 'ipinfo.cpp'),
-        (Join-Path $here 'util.cpp'),
-        '-lgdi32', '-luser32', '-lshell32')
+    # 每个套件单独编、单独跑；日志写 TEMP，避免默认 OutDir=仓库根目录时污染 git status
+    $suites = @(
+        @{ Name = 'test_ipinfo'; Src = 'tests\test_ipinfo.cpp'; Extra = @('ipinfo.cpp') },
+        @{ Name = 'test_probe';  Src = 'tests\test_probe.cpp';  Extra = @('probe.cpp') }
+    )
 
-    Write-Host "测试编译：$gpp"
-    Remove-Item $outLog -Force -ErrorAction SilentlyContinue
-    # 走 cmd /c 重定向：Start-Process -PassThru 在这台机器上 ExitCode 恒为空，
-    # 而 PowerShell 直接把原生命令输出重定向到文件时又会踩命名管道限制。
-    $quoted = $testArgs | ForEach-Object { if ($_ -match '\s') { '"{0}"' -f $_ } else { $_ } }
-    $cmdLine = '"{0}" {1} > "{2}" 2>&1' -f $gpp, ($quoted -join ' '), $outLog
-    cmd /c $cmdLine
-    $testCode = $LASTEXITCODE
-    if (Test-Path $outLog) { Get-Content -LiteralPath $outLog | ForEach-Object { Write-Host "  $_" } }
-    if ($testCode -ne 0) { throw "测试编译失败（exit $testCode）" }
+    foreach ($suite in $suites) {
+        $testExe = Join-Path $OutDir ($suite.Name + '.exe')
+        $outLog = Join-Path $env:TEMP ('ip-float-' + $suite.Name + '-build.log')
+        $testArgs = @('-std=gnu++17', '-O2', '-DUNICODE', '-D_UNICODE') + $warn + @(
+            '-o', $testExe,
+            (Join-Path $root $suite.Src))
+        foreach ($extra in $suite.Extra) { $testArgs += (Join-Path $here $extra) }
+        $testArgs += @((Join-Path $here 'util.cpp'), '-lgdi32', '-luser32', '-lshell32')
 
-    & $testExe
-    if ($LASTEXITCODE -ne 0) { throw "测试失败（exit $LASTEXITCODE）" }
+        Write-Host "测试编译：$($suite.Name)"
+        Remove-Item $outLog -Force -ErrorAction SilentlyContinue
+        # 走 cmd /c 重定向：Start-Process -PassThru 在这台机器上 ExitCode 恒为空，
+        # 而 PowerShell 直接把原生命令输出重定向到文件时又会踩命名管道限制。
+        $quoted = $testArgs | ForEach-Object { if ($_ -match '\s') { '"{0}"' -f $_ } else { $_ } }
+        $cmdLine = '"{0}" {1} > "{2}" 2>&1' -f $gpp, ($quoted -join ' '), $outLog
+        cmd /c $cmdLine
+        $testCode = $LASTEXITCODE
+        if (Test-Path $outLog) { Get-Content -LiteralPath $outLog | ForEach-Object { Write-Host "  $_" } }
+        if ($testCode -ne 0) { throw "$($suite.Name) 编译失败（exit $testCode）" }
+
+        & $testExe
+        if ($LASTEXITCODE -ne 0) { throw "$($suite.Name) 运行失败（exit $LASTEXITCODE）" }
+    }
 }
 
 if ($Sign) {

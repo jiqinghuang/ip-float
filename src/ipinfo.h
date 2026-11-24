@@ -3,6 +3,9 @@
 #include <cstdint>
 #include <string>
 
+// 数据源没给 UTC 偏移时的哨兵值（不能和任何真实偏移撞车）
+const int kNoOffset = 0x7fffffff;
+
 // 纯数据 + 纯解析：不依赖窗口、GDI、WinHTTP，方便单测。
 struct IpInfo {
     std::wstring ip;
@@ -13,6 +16,7 @@ struct IpInfo {
     std::wstring org;
     std::wstring source;
     uint64_t     at = 0;   // 抓取时间（FILETIME, UTC）
+    int          utcOffsetMinutes = kNoOffset;   // 该 IP 所在时区相对 UTC（分钟）
 };
 
 // 从一段 JSON 里取字符串字段；找不到返回空串。够 ipinfo/ipapi 两个固定源用。
@@ -23,3 +27,6 @@ bool ParseIpInfo(const std::string& json, const std::wstring& source, IpInfo& ou
 
 // 把 "AS20473 The Constant Company, LLC" 压成 "AS20473 Vultr"
 std::wstring ShortAsn(const IpInfo& info);
+
+// "+0800" / "-0500" → 分钟；不合法返回 kNoOffset
+int ParseUtcOffset(const std::string& s);

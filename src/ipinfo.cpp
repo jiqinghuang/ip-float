@@ -136,6 +136,7 @@ bool ParseIpInfo(const std::string& json, const std::wstring& source, IpInfo& ou
     out.country = Utf8ToWide(country);
     out.region  = Utf8ToWide(JsonStr(json, "region"));
     out.city    = Utf8ToWide(JsonStr(json, "city"));
+    out.utcOffsetMinutes = ParseUtcOffset(JsonStr(json, "utc_offset"));
     std::wstring org = Utf8ToWide(JsonStr(json, "org"));
     out.asn = Utf8ToWide(JsonStr(json, "asn"));
 
@@ -176,8 +177,7 @@ bool ParseIpInfo(const std::string& json, const std::wstring& source, IpInfo& ou
     return true;
 }
 
-std::wstring ShortAsn(const IpInfo& info)
-{
+std::wstring ShortAsn(const IpInfo& info){
     if (info.asn.empty() && info.org.empty()) return L"";
 
     struct Alias { const wchar_t* pattern; const wchar_t* name; };
@@ -245,4 +245,18 @@ std::wstring ShortAsn(const IpInfo& info)
     if (!info.asn.empty())
         return shown.empty() ? info.asn : info.asn + L" " + shown;
     return shown;
+}
+
+// "+0800" / "-0500" → 分钟；格式不对返回 kNoOffset
+int ParseUtcOffset(const std::string& s)
+{
+    if (s.size() != 5) return kNoOffset;
+    if (s[0] != '+' && s[0] != '-') return kNoOffset;
+    for (int i = 1; i < 5; ++i)
+        if (s[i] < '0' || s[i] > '9') return kNoOffset;
+    int hh = (s[1] - '0') * 10 + (s[2] - '0');
+    int mm = (s[3] - '0') * 10 + (s[4] - '0');
+    if (hh > 14 || mm > 59) return kNoOffset;
+    int v = hh * 60 + mm;
+    return s[0] == '-' ? -v : v;
 }

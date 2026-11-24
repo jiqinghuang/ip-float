@@ -18,6 +18,10 @@ ip-float.ini
 *.png.log
 *.png.json
 
+# 右键「网络诊断…」/ --diag 的产物（写在 exe 旁边）
+ip-float-diag.txt
+ip-float-diag.json
+
 # ── 签名证书 ─────────────────────────────────────────────────
 # sign.ps1 -ExportCer 的产物；公钥证书不该顺手提交
 *.cer
