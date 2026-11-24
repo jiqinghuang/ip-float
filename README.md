@@ -2,16 +2,26 @@
 
 [![build](https://github.com/jiqinghuang/ip-float/actions/workflows/build.yml/badge.svg)](https://github.com/jiqinghuang/ip-float/actions/workflows/build.yml)
 
-无边框置顶小卡片，三行显示：
+无边框置顶小卡片，三行显示：出口 IP 与地区、ASN 与更新时间，以及五个状态徽章。
 
-```
-203.0.113.42 · JP Tokyo Chiyoda
-AS20473 Vultr · 2分钟前
-● TUN  ● V6  ● 代理  ● 时区  ● DNS
-```
+<p align="center">
+  <img src="preview-exe.png" width="640"
+       alt="ip-float 卡片：第一行 203.0.113.42 · JP Tokyo Chiyoda，第二行 AS20473 Vultr · 2分钟前，第三行五个绿色状态点 TUN / V6 / 代理 / 时区 / DNS">
+</p>
 
-第三行是五个状态徽章：**绿=正常、黄=存疑、红=问题、灰=没测/读不到**。
-灰点永远不冒充通过——没测过就是没测过。卡片上只放结论，完整依据看右键「网络诊断…」。
+<p align="center"><sub>卡片本体 · 340×80 逻辑像素 · 离屏渲染（示例数据）</sub></p>
+
+第三行是五个状态徽章：**绿=正常、黄=存疑、红=问题、空心 ○=当前配置下不适用、实心灰 ●=没测到**。
+灰点永远不冒充通过——没测过就是没测过。
+
+卡片上只放结论。想知道**为什么**，右键打开诊断面板，每一行下面那行小字就是判定依据：
+
+<p align="center">
+  <img src="preview-diag.png" width="360" alt="网络诊断面板：顶部结论『未发现泄漏』与依据，下面按隧道 / 出口 / 一致性分组，逐行给出检查项、值与判定依据"> &nbsp;&nbsp;
+  <img src="preview-settings.png" width="320" alt="设置窗口：刷新间隔、不透明度、窗口总在最前、开机时自动启动">
+</p>
+
+<p align="center"><sub>左：右键「网络诊断…」，逐行给出依据 &nbsp;·&nbsp; 右：设置窗口</sub></p>
 
 |路径|说明|
 |-|-|
@@ -19,7 +29,7 @@ AS20473 Vultr · 2分钟前
 |`src/`|C++ 源码（按职责拆分）+ 图标 + `build.ps1` / `sign.ps1`|
 |`tests/`|纯逻辑单测（`build.ps1 -Test`）|
 |`.site-assets/`|网站素材生成 / 站点页面校验|
-|`preview-exe.png`|实拍|
+|`preview-exe.png` / `preview-diag.png` / `preview-settings.png`|卡片、诊断面板、设置窗口的截图|
 
 ## 用法
 
