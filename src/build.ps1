@@ -24,6 +24,47 @@ $PSNativeCommandUseErrorActionPreference = $false
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
+
+# 版本号在三个地方各有一份（MSYS2 的 windres 不允许 version.h 预处理器 include）。
+# 发版前最容易漏改，所以在每次构建前先把三处一致性钉死。
+function Assert-VersionConsistency {
+    $versionText = Get-Content -LiteralPath (Join-Path $here 'version.h') -Raw
+    $match = [regex]::Match($versionText, '#define\s+IPFLOAT_VERSION_A\s+"([0-9]+\.[0-9]+\.[0-9]+)"')
+    if (-not $match.Success) { throw 'version.h 里找不到 IPFLOAT_VERSION_A "x.y.z"' }
+
+    $version = $match.Groups[1].Value
+    $parts = $version.Split('.')
+    $major = [int]$parts[0]
+    $minor = [int]$parts[1]
+    $patch = [int]$parts[2]
+
+    $rcText = Get-Content -LiteralPath (Join-Path $here 'app.rc') -Raw
+    $rcFileVersion = 'FILEVERSION {0},{1},{2},0' -f $major, $minor, $patch
+    if ($rcText -notmatch [regex]::Escape($rcFileVersion)) {
+        throw "app.rc 的 FILEVERSION 与 version.h 不一致（期望 $rcFileVersion）"
+    }
+    $rcProductVersion = 'PRODUCTVERSION {0},{1},{2},0' -f $major, $minor, $patch
+    if ($rcText -notmatch [regex]::Escape($rcProductVersion)) {
+        throw "app.rc 的 PRODUCTVERSION 与 version.h 不一致（期望 $rcProductVersion）"
+    }
+    foreach ($key in @('FileVersion', 'ProductVersion')) {
+        $valueLine = 'VALUE "' + $key + '", "' + $version + '"'
+        if ($rcText -notmatch [regex]::Escape($valueLine)) {
+            throw "app.rc 的 $key 与 version.h 不一致（期望 $version）"
+        }
+    }
+
+    $manifestText = Get-Content -LiteralPath (Join-Path $here 'app.manifest') -Raw
+    $manifestIdentity = 'assemblyIdentity type="win32" name="ip-float" version="' + $version + '.0"'
+    if ($manifestText -notmatch [regex]::Escape($manifestIdentity)) {
+        throw "app.manifest 的 assemblyIdentity 与 version.h 不一致（期望 $version.0）"
+    }
+
+    Write-Host "版本一致性检查通过：$version"
+}
+
+Assert-VersionConsistency
+
 if (-not $OutDir) {
     $OutDir = $root
 } elseif (-not [System.IO.Path]::IsPathRooted($OutDir)) {

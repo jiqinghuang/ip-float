@@ -34,9 +34,10 @@ const UINT ID_TIMER_SHOT       = 3;
 const UINT ID_TIMER_FLASH      = 5;
 const UINT ID_TIMER_TRAY_RETRY = 6;
 
-const UINT WM_APP_FETCHED  = WM_APP + 1;
+const UINT WM_APP_FETCHED  = WM_APP + 1;   // 第一阶段：IP / 地区回来了
 const UINT WM_APP_TRAY     = WM_APP + 2;
 const UINT WM_APP_ACTIVATE = WM_APP + 3;   // 第二个实例让第一个把卡片亮出来
+const UINT WM_APP_DIAGNOSED = WM_APP + 4;  // 第二阶段：出口体检 / 徽章回来了
 
 enum {
     IDM_REFRESH = 100,
@@ -59,16 +60,23 @@ const int  kTrayRetries = 3;
 struct FetchJob {
     HWND hwnd = nullptr;
     std::vector<std::wstring> sources;
+    std::wstring expectedCountry;
+    std::wstring expectedAsn;
 };
 
+// 第一阶段：只带 IP，先让卡片显示出来。
 struct FetchResult {
     bool         ok = false;
     IpInfo       info;
     std::wstring err;
     std::wstring errFull;
+};
+
+// 第二阶段：体检结果，到了再更新徽章和诊断窗口。
+struct DiagResult {
     std::vector<Badge> badges;          // 卡片第三行
-    Sev          verdict = Sev::Skip;
-    Diagnosis    diag;                  // 诊断窗口用的完整报告
+    Sev                verdict = Sev::Skip;
+    Diagnosis          diag;            // 诊断窗口用的完整报告
 };
 
 struct App {
@@ -138,18 +146,27 @@ unsigned __stdcall FetchThread(void* param)
     auto* result = new FetchResult();
     result->ok = FetchNow(job->sources, result->info, result->err, result->errFull);
 
-    // 出口探测只依赖「拿到的 IP」，所以抓取失败也照样能算（v4 会标成探测失败）
-    ProbeInput in;
-    ProbeExits(result->info, in);
-    Diagnosis diag = Diagnose(in);
-    result->badges = BuildBadges(diag);
-    result->verdict = diag.verdict;
-    result->diag = diag;
-
+    // 先发 IP：卡片不用等后面的 v6/DNS 探测。这里必须拷贝一份 info，
+    // 因为消息一旦投递，接收方会在 UI 线程 delete result。
+    const IpInfo base = result->info;
     if (!PostMessageW(job->hwnd, WM_APP_FETCHED, 0, (LPARAM)result)) {
         // 窗口已经销毁（进程正在退出）：结果没人要了。
         // 不要回写任何 UI 状态——App 可能已经析构。
         delete result;
+        return 0;
+    }
+
+    // 出口探测只依赖「拿到的 IP」，所以抓取失败也照样能算（v4 会标成探测失败）
+    ProbeInput in;
+    ProbeExits(base, in, job->expectedCountry, job->expectedAsn);
+    Diagnosis diag = Diagnose(in);
+    auto* diagResult = new DiagResult();
+    diagResult->badges = BuildBadges(diag);
+    diagResult->verdict = diag.verdict;
+    diagResult->diag = diag;
+
+    if (!PostMessageW(job->hwnd, WM_APP_DIAGNOSED, 0, (LPARAM)diagResult)) {
+        delete diagResult;
     }
     return 0;
 }
@@ -167,6 +184,8 @@ void StartFetch(App& app)
     auto* job = new FetchJob();
     job->hwnd = app.hwnd;
     job->sources = app.sources;
+    job->expectedCountry = app.cfg.expectedCountry;
+    job->expectedAsn = app.cfg.expectedAsn;
 
     HANDLE t = (HANDLE)_beginthreadex(nullptr, 0, FetchThread, job, 0, nullptr);
     if (t) {
@@ -476,10 +495,8 @@ void ShowSettings(App& app)
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
 
-void AppOnFetched(App& app, FetchResult* r)
+void AppOnIpFetched(App& app, FetchResult* r)
 {
-    app.busy.store(false);
-
     if (r) {
         if (r->ok) {
             app.info = r->info;
@@ -493,6 +510,18 @@ void AppOnFetched(App& app, FetchResult* r)
             app.lastErrMsg = r->err;
             app.lastErrFull = r->errFull;
         }
+        delete r;
+    }
+
+    // 先让第一行和第二行出来；第三行保留上一轮徽章，等 WM_APP_DIAGNOSED 再更新。
+    InvalidateRect(app.hwnd, nullptr, FALSE);
+}
+
+void AppOnDiagnosed(App& app, DiagResult* r)
+{
+    app.busy.store(false);
+
+    if (r) {
         app.badges = r->badges;
         app.verdict = r->verdict;
         app.diag = r->diag;
@@ -510,11 +539,12 @@ void AppOnFetched(App& app, FetchResult* r)
     if (DiagWindowOpen()) {
         UpdateDiagWindow(app.diag, app.diagAt);
     } else if (app.pendingPanelOpen) {
-        // 上次退出时面板是开着的：现在有数据了，一次性把正确尺寸开出来
+        // 上次退出时面板是开着的：等诊断数据齐了再一次性开正确尺寸
         app.pendingPanelOpen = false;
         ShowDiagWindow(app.hwnd, app.diag, app.diagAt);
     }
 
+    // 截图必须等诊断也完成，否则第三行还是上一轮的徽章。
     if (!app.opt.shotPath.empty() && !app.shotDone) {
         app.shotDone = true;
         SetTimer(app.hwnd, ID_TIMER_SHOT, 700, nullptr);
@@ -602,7 +632,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
 
     case WM_APP_FETCHED:
-        AppOnFetched(*app, (FetchResult*)lp);
+        AppOnIpFetched(*app, (FetchResult*)lp);
+        return 0;
+
+    case WM_APP_DIAGNOSED:
+        AppOnDiagnosed(*app, (DiagResult*)lp);
         return 0;
 
     case WM_APP_TRAY:

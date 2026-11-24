@@ -9,7 +9,7 @@
 // 严重度。Skip 表示「没测/读不到」，它**不是**通过。
 enum class Sev { Ok, Warn, Bad, Skip };
 
-enum class LineId { Tunnel, V6Route, Proxy, ExitV4, ExitV6, Asn, Tz, Dns };
+enum class LineId { Tunnel, V6Route, Proxy, ExitV4, ExitV6, V6Local, Asn, Expect, Tz, Dns };
 
 struct ProbeLine {
     LineId       id    = LineId::Tunnel;
@@ -44,6 +44,11 @@ struct ProbeInput {
     std::wstring dnsResolverCountry;   // 解析器出口 IP 的归属国（可能为空）
     std::wstring dnsResolverOrg;       // 解析器出口 IP 的运营商，用来识别公共 DNS
     std::wstring dnsError;             // 查询失败时的原因（错误码），空 = 没失败
+
+    // 可选期望出口：空 = 不检查。配置后诊断里多一行「期望」，
+    // 不匹配只影响总判定和诊断窗口，不在卡片上新增第六个徽章。
+    std::wstring expectedCountry;      // 国家码，例如 JP
+    std::wstring expectedAsn;          // 规范化为 AS20473
 };
 
 struct Diagnosis {
@@ -62,7 +67,7 @@ struct Diagnosis {
 // 纯函数：不联网、不读系统。全部输入来自 ProbeInput，方便单测。
 Diagnosis Diagnose(const ProbeInput& in);
 
-// 卡片第三行的 5 个徽章，顺序固定：TUN / V6 / 代理 / 时区 / DNS
+// 卡片第三行的 5 个徽章，顺序固定：TUN / V6 / 路径 / 时区 / DNS
 struct Badge {
     std::wstring label;
     Sev          sev = Sev::Skip;

@@ -1,6 +1,6 @@
 """重新生成 project-ip-float.html 用的截图素材。
 
-网页上的两张图来自 exe 自带的自检模式，不联网、可重复：
+网页上的三张图来自 exe 自带的自检模式，不联网、可重复：
     ip-float.exe --render card.png --render-scale 2   -> 卡片本体（离屏渲染）
     ip-float.exe --demo --shot-dlg settings.png        -> 设置窗口（屏幕抓图）
 

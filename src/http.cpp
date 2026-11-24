@@ -52,13 +52,19 @@ std::wstring WinHttpErrorText(DWORD code)
     case 12029: hint = L"无法连接（端口不通、被墙，或该走代理）"; break;
     case 12030: hint = L"连接被中断"; break;
     case 12031: hint = L"连接被重置"; break;
-    case 12175: hint = L"TLS 握手失败"; break;
-    case 12182: hint = L"证书颁发机构不受信任"; break;
-    case 12183: hint = L"证书域名不匹配"; break;
-    case 12184: hint = L"证书已过期"; break;
-    case 12185: hint = L"证书用途不匹配（常见于代理/中间人拦截）"; break;
-    case 12186: hint = L"证书无效"; break;
-    case 12187: hint = L"证书吊销状态无法确认"; break;
+    case 12037: hint = L"证书已过期或尚未生效"; break;
+    case 12038: hint = L"证书域名不匹配"; break;
+    case 12045: hint = L"证书颁发机构不受信任"; break;
+    case 12057: hint = L"证书吊销状态无法确认"; break;
+    case 12157: hint = L"TLS 安全通道错误"; break;
+    case 12169: hint = L"证书无效"; break;
+    case 12170: hint = L"证书已被吊销"; break;
+    case 12175: hint = L"TLS 安全通道失败（证书或协议不兼容）"; break;
+    case 12179: hint = L"证书用途不匹配"; break;
+    case 12185: hint = L"客户端证书缺少私钥（常见于受限账户或代理）"; break;
+    case 12186: hint = L"客户端证书私钥不可访问"; break;
+    case 12187: hint = L"代理要求客户端证书"; break;
+    case 12188: hint = L"代理的 TLS 安全通道失败"; break;
     default: break;
     }
     wchar_t buf[160] = {};
@@ -93,7 +99,7 @@ std::wstring CodeText(const wchar_t* what, DWORD code)
 } // namespace
 
 bool HttpGet(const std::wstring& url, std::string& body, std::wstring& err,
-             int timeoutMs, bool direct)
+             int timeoutMs, bool direct, bool lenientTls)
 {
     body.clear();
     err.clear();
@@ -155,6 +161,22 @@ bool HttpGet(const std::wstring& url, std::string& body, std::wstring& err,
     if (!req) {
         err = CodeText(L"请求创建失败", GetLastError());
         return false;
+    }
+
+    // 这些请求都不需要客户端证书。某些机器上证书库里会有一张没有私钥的
+    // 客户端证书，WinHTTP 自动挑中它后会报 12185（CLIENT_CERT_NO_PRIVATE_KEY）。
+    // 明确告诉 WinHTTP 不要找客户端证书。
+    WinHttpSetOption(req.get(), WINHTTP_OPTION_CLIENT_CERT_CONTEXT,
+                     (LPVOID)WINHTTP_NO_CLIENT_CERT_CONTEXT, 0);
+
+    // 只给「公网 IP 回显」这类没有敏感数据的探针使用：某些代理会返回
+    // 用途/CA 不匹配的证书，严格校验证书会导致永远拿不到 IP。
+    if (lenientTls) {
+        DWORD flags = SECURITY_FLAG_IGNORE_UNKNOWN_CA |
+                      SECURITY_FLAG_IGNORE_CERT_DATE_INVALID |
+                      SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
+                      SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
+        WinHttpSetOption(req.get(), WINHTTP_OPTION_SECURITY_FLAGS, &flags, sizeof(flags));
     }
 
     WinHttpAddRequestHeaders(req.get(), L"Accept: application/json", (ULONG)-1L,

@@ -3,6 +3,7 @@ name: build
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -45,6 +46,11 @@ jobs:
             tests/test_ipinfo.cpp src/ipinfo.cpp src/util.cpp \
             -lgdi32 -luser32 -lshell32
           ./dist/test_ipinfo.exe
+          g++ -std=gnu++17 -O2 -DUNICODE -D_UNICODE -Wall -Wextra -Werror \
+            -o dist/test_probe.exe \
+            tests/test_probe.cpp src/probe.cpp src/util.cpp \
+            -lgdi32 -luser32 -lshell32
+          ./dist/test_probe.exe
 
       - name: Upload exe
         uses: actions/upload-artifact@v4
@@ -52,3 +58,23 @@ jobs:
           name: ip-float-windows
           path: dist/ip-float.exe
           if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download built exe
+        uses: actions/download-artifact@v4
+        with:
+          name: ip-float-windows
+          path: dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/ip-float.exe
+          generate_release_notes: true

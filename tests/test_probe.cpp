@@ -119,6 +119,30 @@ void TestNoPublicV6()
     CheckSev(d.verdict, Sev::Ok, "nov6: verdict still ok");
 }
 
+// 远端回显拿不到时：出口地址必须写「未取到」，本机公网 IPv6 单独一行，不能混在一起。
+void TestV6LocalFallback()
+{
+    printf("\n-- v6 local fallback --\n");
+    ProbeInput in = Base();
+    in.v6.ok = true;
+    in.v6.ip.clear();
+    Diagnosis d = Diagnose(in);
+
+    const ProbeLine* exit = d.Find(LineId::ExitV6);
+    Check(exit != nullptr, "v6fallback: exit line exists");
+    if (exit) {
+        CheckW(exit->value, L"未取到", "v6fallback: exit value is not the local address");
+        CheckSev(exit->sev, Sev::Skip, "v6fallback: unknown exit is skip");
+    }
+
+    const ProbeLine* local = d.Find(LineId::V6Local);
+    Check(local != nullptr, "v6fallback: local line exists");
+    if (local) {
+        CheckW(local->value, in.facts.publicV6, "v6fallback: local line shows public v6");
+        CheckSev(local->sev, Sev::Skip, "v6fallback: local line is informational");
+    }
+}
+
 // 坑 2：双栈出口不同源
 void TestExitMismatch()
 {
@@ -158,6 +182,35 @@ void TestProxyOverlay()
     ProbeInput pac = Base();
     pac.facts.pacConfigured = true;
     CheckSev(Diagnose(pac).Find(LineId::Proxy)->sev, Sev::Warn, "proxy: pac warns");
+}
+
+// 期望出口：配置后只影响总判定和诊断行，不新增卡片徽章；空配置不产生该行。
+void TestExpectation()
+{
+    printf("\n-- expected exit --\n");
+    ProbeInput in = Base();
+    in.v4.country = L"JP";
+    in.expectedCountry = L"JP";
+    in.expectedAsn = L"20473";       // 应规范化为 AS20473
+    Diagnosis d = Diagnose(in);
+    const ProbeLine* ok = d.Find(LineId::Expect);
+    Check(ok != nullptr, "expect: line exists when configured");
+    if (ok) CheckSev(ok->sev, Sev::Ok, "expect: match ok");
+    CheckSev(d.verdict, Sev::Ok, "expect: matching verdict ok");
+
+    ProbeInput bad = Base();
+    bad.v4.country = L"US";
+    bad.expectedCountry = L"JP";
+    bad.expectedAsn = L"AS20473";
+    Diagnosis db = Diagnose(bad);
+    const ProbeLine* mismatch = db.Find(LineId::Expect);
+    Check(mismatch != nullptr, "expect: mismatch line exists");
+    if (mismatch) CheckSev(mismatch->sev, Sev::Warn, "expect: mismatch warns");
+    CheckSev(db.verdict, Sev::Warn, "expect: mismatch verdict warn");
+
+    ProbeInput none = Base();
+    Check(none.expectedCountry.empty() && none.expectedAsn.empty(), "expect: default off");
+    Check(Diagnose(none).Find(LineId::Expect) == nullptr, "expect: no line when unset");
 }
 
 // 坑 3：探测失败不能冒充「未发现泄漏」
@@ -224,9 +277,11 @@ int main()
     TestClean();
     TestV6NotTunneled();
     TestNoPublicV6();
+    TestV6LocalFallback();
     TestExitMismatch();
     TestTimezone();
     TestProxyOverlay();
+    TestExpectation();
     TestNoProxyV6Direct();
     TestProbeFailed();
     TestBadges();

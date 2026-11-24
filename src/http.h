@@ -7,5 +7,7 @@
 // timeoutMs <= 0 时用默认超时（8s）。探测类请求会传更短的值，避免拖慢刷新。
 // direct = true 时**绕过系统代理**，只走路由表（测 TUN 隧道必须这样，
 // 否则 IPv6 字面量会被 HTTP 代理的 CONNECT 卡住，误报「不可达」）。
+// lenientTls = true 时忽略证书 CA/用途/域名/日期错误，**只用于公网 IP 回显探针**；
+// 普通数据源请求必须保持严格校验。
 bool HttpGet(const std::wstring& url, std::string& body, std::wstring& err,
-             int timeoutMs = 0, bool direct = false);
+             int timeoutMs = 0, bool direct = false, bool lenientTls = false);

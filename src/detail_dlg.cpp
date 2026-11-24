@@ -120,6 +120,7 @@ int GroupOf(LineId id)
         case LineId::Proxy:   return 0;
         case LineId::ExitV4:
         case LineId::ExitV6:
+        case LineId::V6Local:
         case LineId::Asn:     return 1;
         default:              return 2;
     }

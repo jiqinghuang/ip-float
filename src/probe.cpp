@@ -1,5 +1,8 @@
 #include "probe.h"
 
+#include <cwchar>
+#include <cwctype>
+
 namespace {
 
 int Rank(Sev s)
@@ -53,6 +56,60 @@ void Push(Diagnosis& d, LineId id, const wchar_t* label, std::wstring value, Sev
     l.na = na;
     l.note = std::move(note);
     d.lines.push_back(std::move(l));
+}
+
+std::wstring TrimText(const std::wstring& s)
+{
+    size_t a = 0, b = s.size();
+    while (a < b && iswspace(s[a])) ++a;
+    while (b > a && iswspace(s[b - 1])) --b;
+    return s.substr(a, b - a);
+}
+
+bool SameText(const std::wstring& a, const std::wstring& b)
+{
+    return _wcsicmp(a.c_str(), b.c_str()) == 0;
+}
+
+// 配置里允许写 "20473" 或 "as20473"，统一成 IpInfo.asn 的 "AS20473"。
+std::wstring NormalizeAsnText(const std::wstring& raw)
+{
+    std::wstring s;
+    for (wchar_t c : raw) {
+        if (!iswspace(c)) s += (wchar_t)towupper(c);
+    }
+    if (s.empty()) return s;
+    if (s.size() >= 2 && s[0] == L'A' && s[1] == L'S') return s;
+    if (s[0] >= L'0' && s[0] <= L'9') return L"AS" + s;
+    return s;
+}
+
+void PushExpectation(Diagnosis& d, const ProbeInput& in)
+{
+    const std::wstring wantCountry = TrimText(in.expectedCountry);
+    const std::wstring wantAsn = NormalizeAsnText(in.expectedAsn);
+    if (wantCountry.empty() && wantAsn.empty()) return;
+
+    if (!in.v4.ok) {
+        Push(d, LineId::Expect, L"期望", L"未知", Sev::Skip,
+             L"IPv4 出口探测失败，无法核对");
+        return;
+    }
+
+    const bool countryOk = wantCountry.empty() || SameText(wantCountry, in.v4.country);
+    const bool asnOk = wantAsn.empty() || SameText(wantAsn, in.v4.asn);
+    std::wstring want = wantCountry;
+    if (!wantAsn.empty()) want += (want.empty() ? L"" : L" / ") + wantAsn;
+    std::wstring got = in.v4.country;
+    if (!in.v4.asn.empty()) got += (got.empty() ? L"" : L" / ") + in.v4.asn;
+    if (got.empty()) got = L"未知";
+
+    if (countryOk && asnOk) {
+        Push(d, LineId::Expect, L"期望", L"符合", Sev::Ok, L"配置 " + want);
+    } else {
+        Push(d, LineId::Expect, L"期望", L"不符", Sev::Warn,
+             L"期望 " + want + L"，实际 " + got);
+    }
 }
 
 } // namespace
@@ -141,9 +198,14 @@ Diagnosis Diagnose(const ProbeInput& in)
             : L"v6 目标打不通；本机无公网 v6 时属正常";
         Push(d, LineId::ExitV6, L"IPv6 出口", L"不可达", Sev::Skip, note);
     } else if (v6.ip.empty()) {
-        // 只做了连通测试（WinHTTP 处理 IPv6 字面量有缺陷，拿不到响应内容）
-        Push(d, LineId::ExitV6, L"IPv6 出口", L"可走通", Sev::Ok,
-             L"已建立 IPv6 连接；路由是否接管见上一节");
+        // 连通性有了，但远端回显拿不到地址。不要把「可走通」冒充成出口地址，
+        // 也不要把本机公网 IPv6 写进「出口」这一行；本机地址单独列一行。
+        Push(d, LineId::ExitV6, L"IPv6 出口", L"未取到", Sev::Skip,
+             L"远端回显不可用，无法确认 IPv6 出口地址");
+        if (f.hasPublicV6 && !f.publicV6.empty()) {
+            Push(d, LineId::V6Local, L"本机 IPv6", f.publicV6, Sev::Skip,
+                 L"本机公网 IPv6，不是远端出口；只有 IPv6 路由未接管时才会直接暴露");
+        }
     } else if (v4.ok && !v6.ip.empty() && v6.ip != v4.ip) {
         Push(d, LineId::ExitV6, L"IPv6 出口", v6.ip, Sev::Bad,
              L"与 IPv4 出口 " + v4.ip + L" 不同源");
@@ -164,6 +226,9 @@ Diagnosis Diagnose(const ProbeInput& in)
     } else {
         Push(d, LineId::Asn, L"归属", L"未知", Sev::Skip);
     }
+
+    // ── 期望出口（可选配置）──────────────────────────────────────────
+    PushExpectation(d, in);
 
     // ── 时区一致性 ───────────────────────────────────────────────────
     if (!v4.ok || v4.utcOffsetMinutes == kUnknownOffset) {

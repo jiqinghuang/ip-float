@@ -20,8 +20,16 @@ namespace {
 
 // v4 出口：ipv4.icanhazip.com 只有 A 记录，必定走 IPv4，返回纯文本 IP
 const wchar_t* kUrlV4  = L"https://ipv4.icanhazip.com";
+// v6 出口：只列 AAAA 记录的域名，必定走 IPv6，返回纯文本 IP。
+// 用域名而不是 IPv6 字面量，绕开 WinHTTP 对字面量的缺陷；direct=true 绕过系统代理。
+const wchar_t* kUrlV6[] = {
+    L"https://ipv6.icanhazip.com",
+    L"https://api6.ipify.org",
+};
 // 归属 / ASN / 时区偏移：ipwho.is 免费、无 key、HTTPS
 const wchar_t* kUrlGeo = L"https://ipwho.is/";
+
+std::wstring Trim(const std::wstring& s);
 
 // 用 Akamai 的 whoami 反查「我这台机器的 DNS 解析器出口 IP」：
 // whoami.akamai.net 的 A 记录是按查询来源应答的，返回的就是递归解析器的地址。
@@ -78,6 +86,50 @@ bool ProbeV6Tcp(const wchar_t* addr, int port, int timeoutMs)
     }
     WSACleanup();
     return ok;
+}
+
+bool IsIpv6Text(const std::wstring& s)
+{
+    if (s.find(L':') == std::wstring::npos) return false;
+    IN6_ADDR addr = {};
+    return InetPtonW(AF_INET6, s.c_str(), &addr) == 1;
+}
+
+// 优先取真实 IPv6 出口地址；取不到时退回原来的 TCP 连通测试。
+// 这两者要区分：有地址才能回答「v6 与 v4 是否同源」，只有连通性只能说「可走通」。
+bool ProbeV6Exit(ExitProbe& out, int timeoutMs)
+{
+    out.ok = false;
+    out.ip.clear();
+    out.err.clear();
+
+    std::string body;
+    std::wstring err;
+    for (const wchar_t* url : kUrlV6) {
+        body.clear();
+        err.clear();
+        if (HttpGet(url, body, err, timeoutMs, /*direct=*/true, /*lenientTls=*/true)) {
+            const std::wstring ip = Trim(Utf8ToWide(body));
+            if (IsIpv6Text(ip)) {
+                out.ok = true;
+                out.ip = ip;
+                return true;
+            }
+            out.err = L"响应不是 IPv6 地址";
+        } else {
+            out.err = err;
+        }
+    }
+
+    // HTTP 走不通（例如本机没有 v6）时，至少保留原来的连通性结论。
+    if (ProbeV6Tcp(L"2606:4700:4700::1111", 443, timeoutMs > 0 ? timeoutMs : 3000)) {
+        out.ok = true;
+        out.ip.clear();
+        out.err.clear();
+        return true;
+    }
+    if (out.err.empty()) out.err = L"TCP 连接失败";
+    return false;
 }
 
 // DNS 解析器出口：一次本地 DNS 查询；解析器不在出口时再查一次它的归属。
@@ -245,9 +297,12 @@ std::wstring Pad(const std::wstring& s, size_t n)
 
 } // namespace
 
-bool ProbeExits(const IpInfo& base, ProbeInput& out)
+bool ProbeExits(const IpInfo& base, ProbeInput& out,
+                const std::wstring& expectedCountry, const std::wstring& expectedAsn)
 {
     out = ProbeInput();
+    out.expectedCountry = expectedCountry;
+    out.expectedAsn = expectedAsn;
     CollectNetFacts(out.facts);
 
     out.v4.ok      = !base.ip.empty();
@@ -277,9 +332,9 @@ bool ProbeExits(const IpInfo& base, ProbeInput& out)
         }
     }
 
-    // v6 目的地能不能走通（2s 超时，不拖慢卡片刷新）
-    out.v6.ok = ProbeV6Tcp(L"2606:4700:4700::1111", 443, 2000);
-    if (!out.v6.ok) out.v6.err = L"TCP 连接失败";
+    // v6 出口：优先取真实地址；取不到再退回连通性测试。
+    // 2.5s 是后台诊断的超时，卡片 IP 不会被它阻塞（见 app.cpp 的两阶段抓取）。
+    ProbeV6Exit(out.v6, 2500);
 
     ProbeDns(out);
 
@@ -304,7 +359,7 @@ bool RunDiag(const std::wstring& outPath, std::wstring& err)
     std::wstring herr;
 
     // ── v4 出口 ──────────────────────────────────────────────────────
-    if (HttpGet(kUrlV4, body, herr)) {
+    if (HttpGet(kUrlV4, body, herr, 0, /*direct=*/true, /*lenientTls=*/true)) {
         in.v4.ip = Trim(Utf8ToWide(body));
         in.v4.ok = !in.v4.ip.empty();
         if (!in.v4.ok) in.v4.err = L"响应为空";
@@ -322,8 +377,7 @@ bool RunDiag(const std::wstring& outPath, std::wstring& err)
     }
 
     // ── v6 出口 ──────────────────────────────────────────────────────
-    in.v6.ok = ProbeV6Tcp(L"2606:4700:4700::1111", 443, 3000);
-    if (!in.v6.ok) in.v6.err = L"TCP 连接失败";
+    ProbeV6Exit(in.v6, 3000);
 
     ProbeDns(in);
 

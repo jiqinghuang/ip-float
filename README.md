@@ -25,7 +25,7 @@
 
 |路径|说明|
 |-|-|
-|**`ip-float.exe`**|★ 成品（当前 **v3.2.0**，约 951 KB）。单文件、双击即开、零运行时依赖。**不进 git**，分发走 [Releases](https://github.com/jiqinghuang/ip-float/releases/latest)|
+|**`ip-float.exe`**|★ 成品（当前 **v3.3.0**，约 963 KB）。单文件、双击即开、零运行时依赖。**不进 git**，分发走 [Releases](https://github.com/jiqinghuang/ip-float/releases/latest)|
 |`src/`|C++ 源码（按职责拆分）+ 图标 + `build.ps1` / `sign.ps1`|
 |`tests/`|纯逻辑单测（`build.ps1 -Test`）|
 |`.site-assets/`|网站素材生成 / 站点页面校验|
@@ -44,7 +44,7 @@
 
 **右键菜单**（卡片和托盘是同一套）：状态行（IP / 组织 / 数据源 / 更新时间） · 立即刷新 · 刷新间隔（1/3/5/10/30/60 分钟） · 设置… · 网络诊断… · 复制 IP · 总在最前 · 开机自启 · 退出。
 
-**网络诊断窗口**：把第三行那五个徽章摊开，逐行给出**依据**（「IPv6 出口 2408:… 与 IPv4 出口 45.77… 不同源」），带刷新 / 复制 / 关闭；关掉后下次启动不会自动再打开，开着则记住。数据来自卡片同一轮抓取，不额外发请求（DNS 解析器除外，那次是本地查询）。
+**网络诊断窗口**：把第三行那五个徽章摊开，逐行给出**依据**（「IPv6 出口 2408:… 与 IPv4 出口 45.77… 不同源」），带刷新 / 复制 / 关闭；关掉后下次启动不会自动再打开，开着则记住。数据来自卡片同一轮抓取；v6 出口会额外发一两次短请求，DNS 解析器那次是本地查询。
 **托盘图标**：双击显示/隐藏；右键菜单同上，额外多一项「隐藏卡片 / 显示卡片」。
 **设置窗口**：刷新间隔（1–1440 分钟）、不透明度（0–100）、总在最前、开机自启（写 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`）。
 
@@ -70,6 +70,10 @@
 
 删掉配置就恢复默认（右上角、5 分钟、94% 不透明）。`--ini` 指向的文件不存在时同样从默认值开始。
 
+**期望出口（可选）**：在 ini 里写 `expectedCountry=JP`、`expectedAsn=AS20473`（ASN 也可以只写 `20473`）。
+配置后诊断窗口会多一行「期望」，与当前出口不符时总判定至少是黄色；不配置则完全关闭这项检查。
+目前通过 ini 配置，设置窗口暂不提供输入框。
+
 ### 命令行
 
 ```powershell
@@ -92,8 +96,8 @@ ip-float.exe --demo --shot-dlg out\dlg.png            # 设置窗口抓图
   同时写 `card.png.json`（width/height/scale/cornerRadius/colors）和 `card.png.log`。
   `--render-scale 2` 是 2x（680×160），默认也是 2。
 * `--diag` 跑的是诊断窗口那套判定的同一个 `Diagnose()`：本机事实、v4/v6 出口、时区一致性、
-  DNS 解析器。适合丢给 CI 或贴进 issue。**需要多久就等多久**（v4 出口 + v6 连通 + 解析器归属，
-  最长约 8 秒），失败项会在报告里写明原因，不会假装通过。
+  DNS 解析器。适合丢给 CI 或贴进 issue。**需要多久就等多久**（v4 出口 + v6 出口 + 解析器归属），
+  失败项会在报告里写明原因，不会假装通过；v6 远端回显不可用时会另列「本机 IPv6」并标注它不是远端出口。
 * `--shot` 走真实的卡片窗口，默认用演示数据（不联网）；只有同时给 `--source` 才取真实数据。
   `--shot-dlg` 只拍设置窗口，永远用演示数据、不联网。
 * 这几种自检都**只读配置、不写回**（不会改你的位置/间隔/数据源）；也都不受单实例限制。
@@ -106,24 +110,29 @@ ip-float.exe --demo --shot-dlg out\dlg.png            # 设置窗口抓图
 ```
 src/
   main.cpp          WinMain / 命令行 / DPI awareness
-  app.cpp|app.h     App 状态、窗口过程、菜单、抓取编排
-  config.cpp|.h     ini 路径、读写、开机自启注册表
+  app.cpp|app.h     App 状态、窗口过程、菜单、两阶段抓取编排
+  config.cpp|.h     ini 路径、读写、开机自启注册表、期望出口
   http.cpp|.h       WinHTTP GET + 错误码翻译
   ipinfo.cpp|.h     纯解析：JSON -> IpInfo（不碰窗口）
+  netinfo.cpp|.h    本机网络事实：代理、网卡/路由、IPv6、时区
+  probe.cpp|.h      出口判定（纯逻辑，可脱离窗口单测）
+  diag.cpp|.h       v4/v6/DNS 探测 + --diag 报告
   card.cpp|.h       CardMetrics / BuildCardText / GDI+ 绘制 / PNG
-  settings_dlg.cpp  设置窗口
+  detail_dlg.cpp|.h 网络诊断窗口
+  settings_dlg.cpp|.h 设置窗口
   tray.cpp|.h       Shell_NotifyIcon + TaskbarCreated
-  selftest.cpp|.h   演示数据 + --render
+  selftest.cpp|.h   演示数据 + --render / --render-dlg
   util.cpp|.h       UTF-8 / 时间 / DPI / URL
-  version.h         版本号唯一来源
+  version.h         版本号唯一来源（build.ps1 会检查三处一致）
   app.rc            ICON / manifest / VERSIONINFO
   app.manifest      asInvoker + PerMonitorV2 + longPathAware
 tests/
-  test_ipinfo.cpp   纯逻辑单测
+  test_ipinfo.cpp   纯解析 / 卡片文案 / 时间 / URL 单测
+  test_probe.cpp    诊断判定 / 徽章 / 期望出口单测
 ```
 
-设计边界：纯逻辑（JSON、卡片文案、时间格式化）不碰窗口；I/O（HTTP、配置）不碰 UI；
-`app.cpp` 只负责接线。这样 `ipinfo/util` 可以脱离窗口直接单测，渲染也能离屏跑。
+设计边界：纯逻辑（JSON、卡片文案、时间格式化、`Diagnose`）不碰窗口；I/O（HTTP、配置）不碰 UI；
+`app.cpp` 只负责接线。这样 `ipinfo/util/probe` 可以脱离窗口直接单测，渲染也能离屏跑。
 
 ## 数据源
 
@@ -148,12 +157,14 @@ pwsh -File src\build.ps1 -Sign            # 编译 + 签名
 ```
 
 * **默认不签名**：构建不应该有“创建根证书”这种副作用；签名是显式步骤。
-* `-Test` 会编译并运行 `tests\test_ipinfo.cpp`，覆盖 JSON 转义/代理对、ipinfo/ipapi 解析、
-  `ShortAsn`、`Ago`、URL host 等纯逻辑。
-* 版本号在 `src/version.h`（代码 / User-Agent）；`src/app.rc` 的 `VERSIONINFO` 里还有一份
-  字面版本号，发版时一起改。
+* `-Test` 会编译并运行两套单测：`tests\test_ipinfo.cpp`（JSON 转义/代理对、ipinfo/ipapi 解析、
+  `ShortAsn`、`Ago`、URL host）和 `tests\test_probe.cpp`（TUN/V6/路径/时区/DNS 判定、徽章、期望出口）。
+* 版本号在 `src/version.h`（代码 / User-Agent）；`src/app.rc` 的 `VERSIONINFO` 和
+  `src/app.manifest` 的 `assemblyIdentity` 里还有两份字面版本号。`build.ps1` 编译前会检查三处一致。
   exe 带 manifest（PerMonitorV2、asInvoker、longPathAware）。
 * 构建开了 `-Wall -Wextra`，**应当零警告**；发布/CI 建议加 `-Werror`。
+* 发版：改好三处版本号后打 tag 并 push（例如 `git tag v3.3.0 && git push origin v3.3.0`），
+  GitHub Actions 会构建、跑两套单测并把 exe 上传到对应的 Release。
 
 ## 「打开文件 - 安全警告」/「Windows 已保护你的电脑」弹窗
 
@@ -268,8 +279,10 @@ python .site-assets\validate.py --site-root ..\jiqinghuang.github.io
 ## 已知限制
 
 * **WinHTTP 处理 IPv6 字面量有缺陷**：带方括号时 `WinHttpConnect` 成功但 `SendRequest` 报
-  `12029`，去掉方括号直接 `12005`。所以 IPv6 只做 TCP 连通测试（不取响应内容），
-  报告里写的是「可走通」而不是出口 IP。
+  `12029`，去掉方括号直接 `12005`。所以 v6 出口改用 AAAA-only 的 `ipv6.icanhazip.com`
+  （域名不是字面量，`direct=true` 绕过系统代理）取真实地址；连这个也走不通时才退回
+  TCP 连通测试。此时「IPv6 出口」写「未取到」，如果有本机公网 IPv6，会另起一行
+  「本机 IPv6」并注明它不是远端出口。
 * **DNS 那一项偶尔会显示「解析器返回了空应答（9501）」**：通常发生在刚切换 TUN 的瞬间
   （sing-box / Clash 的 DNS 后端还没就绪，回了空记录）。它已经带间隔重试三次，多数情况下自愈；
   如果持续出现，那是你本地解析器真的不给 `whoami.akamai.net` 这条记录，不是隧道的问题。
@@ -288,5 +301,5 @@ python .site-assets\validate.py --site-root ..\jiqinghuang.github.io
 * 仓库已接上 git（`origin` = `https://github.com/jiqinghuang/ip-float.git`）；
   改源码时顺手多提交几次，别攒成一个大 commit —— 出问题才有得回退。
 * **`ip-float.exe` 不进仓库**：分发走 [GitHub Releases](https://github.com/jiqinghuang/ip-float/releases/latest)，
-  下载链接固定为 `/releases/latest`。重编一次哈希就变一次，把 951 KB 的二进制反复写进 git
+  下载链接固定为 `/releases/latest`。重编一次哈希就变一次，把约 963 KB 的二进制反复写进 git
   历史没有意义。`build.ps1` 默认输出到仓库根目录，但 `dist/` 和 `ip-float.exe` 都被忽略。

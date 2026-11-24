@@ -4,11 +4,20 @@
 
 #include <windows.h>
 
+#include <cwctype>
 #include <string>
 
 namespace {
 
 const wchar_t* kSection = L"ip-float";
+
+std::wstring TrimText(const std::wstring& s)
+{
+    size_t a = 0, b = s.size();
+    while (a < b && iswspace(s[a])) ++a;
+    while (b > a && iswspace(s[b - 1])) --b;
+    return s.substr(a, b - a);
+}
 
 std::wstring GetEnv(const wchar_t* name)
 {
@@ -120,6 +129,14 @@ bool LoadConfig(const std::wstring& path, Config& cfg)
     GetPrivateProfileStringW(kSection, L"source", L"", src, 2048, p);
     s.source = src;
 
+    wchar_t expectCountry[64] = {};
+    GetPrivateProfileStringW(kSection, L"expectedCountry", L"", expectCountry, 64, p);
+    s.expectedCountry = TrimText(expectCountry);
+
+    wchar_t expectAsn[64] = {};
+    GetPrivateProfileStringW(kSection, L"expectedAsn", L"", expectAsn, 64, p);
+    s.expectedAsn = TrimText(expectAsn);
+
     if (s.intervalMinutes < 1) s.intervalMinutes = 1;
     if (s.intervalMinutes > 1440) s.intervalMinutes = 1440;
     if (s.opacityPercent < 0) s.opacityPercent = 0;
@@ -148,6 +165,8 @@ bool SaveConfig(const std::wstring& path, const Config& cfg)
     put(L"y",               std::to_wstring(cfg.y));
     put(L"panelOpen",       cfg.panelOpen ? L"1" : L"0");
     put(L"source",          cfg.source);   // 空值 = 删除该键，恢复内置源
+    put(L"expectedCountry", cfg.expectedCountry);
+    put(L"expectedAsn",     cfg.expectedAsn);
 
     return ok;
 }
