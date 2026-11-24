@@ -43,13 +43,14 @@ std::wstring HoursText(int minutes)
 }
 
 void Push(Diagnosis& d, LineId id, const wchar_t* label, std::wstring value, Sev sev,
-          std::wstring note = std::wstring())
+          std::wstring note = std::wstring(), bool na = false)
 {
     ProbeLine l;
     l.id = id;
     l.label = label;
     l.value = std::move(value);
     l.sev = sev;
+    l.na = na;
     l.note = std::move(note);
     d.lines.push_back(std::move(l));
 }
@@ -69,9 +70,10 @@ Diagnosis Diagnose(const ProbeInput& in)
     // ── 隧道 ──────────────────────────────────────────────────────────
     if (!tunnelInUse) {
         Push(d, LineId::Tunnel, L"隧道",
-             f.tunAdapter.empty() ? L"未检测到" : L"存在但未接管",
+             f.tunAdapter.empty() ? L"未使用" : L"存在但未接管",
              Sev::Skip,
-             f.tunAdapter.empty() ? L"默认路由仍走物理网卡" : f.tunAdapter);
+             f.tunAdapter.empty() ? L"默认路由仍走物理网卡，当前直连" : f.tunAdapter,
+             /*na=*/true);
     } else if (f.hasPublicV6 && !f.tunDefaultV6) {
         Push(d, LineId::Tunnel, L"隧道", L"已接管 IPv4，IPv6 未接管", Sev::Warn, f.tunIfName);
     } else {
@@ -81,11 +83,12 @@ Diagnosis Diagnose(const ProbeInput& in)
 
     // ── IPv6 路由（这是最容易被忽略的泄漏面）──────────────────────────
     if (!f.hasPublicV6 && !f.tunDefaultV6) {
-        Push(d, LineId::V6Route, L"IPv6 路由", L"本机无公网 IPv6", Sev::Skip);
+        Push(d, LineId::V6Route, L"IPv6 路由", L"本机无公网 IPv6", Sev::Skip,
+             std::wstring(), /*na=*/true);
     } else if (!tunnelInUse && !proxyInUse) {
         // 没开任何代理/隧道：v6 直连就是正常上网，不构成「泄漏」
         Push(d, LineId::V6Route, L"IPv6 路由", L"直连", Sev::Skip,
-             L"未使用隧道或代理，不存在泄漏问题");
+             L"未使用隧道或代理，不存在泄漏问题", /*na=*/true);
     } else if (f.hasPublicV6 && !f.tunDefaultV6) {
         // 有人在用隧道/代理，却留着一条直连的公网 v6 —— 结构性泄漏
         Sev sev = tunnelInUse ? Sev::Bad : Sev::Warn;
@@ -221,7 +224,7 @@ std::vector<Badge> BuildBadges(const Diagnosis& d)
     auto add = [&](const wchar_t* label, LineId id) {
         Badge b;
         b.label = label;
-        if (const ProbeLine* l = d.Find(id)) b.sev = l->sev;
+        if (const ProbeLine* l = d.Find(id)) { b.sev = l->sev; b.na = l->na; }
         out.push_back(std::move(b));
     };
 

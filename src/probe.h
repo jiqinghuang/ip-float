@@ -16,6 +16,7 @@ struct ProbeLine {
     std::wstring label;
     std::wstring value;
     Sev          sev   = Sev::Skip;
+    bool         na    = false; // true = 这个检查在当前配置下不适用（≠ 没测到）
     std::wstring note;          // 依据 / 补充说明，可为空
 };
 
@@ -64,6 +65,7 @@ Diagnosis Diagnose(const ProbeInput& in);
 struct Badge {
     std::wstring label;
     Sev          sev = Sev::Skip;
+    bool         na  = false;   // 不适用：卡片画空心点
 };
 std::vector<Badge> BuildBadges(const Diagnosis& d);
 

@@ -32,6 +32,7 @@ struct Row {
     HFONT        font = nullptr;
     COLORREF     color = kText;
     bool         hasDot = false;
+    bool         hollow = false;   // 空心点 = 不适用
     COLORREF     dot = kSkip;
     bool         wrap = false;
     std::wstring text;
@@ -200,7 +201,7 @@ void Rebuild(DiagWin& s)
         Row lab;
         lab.y = y; lab.h = s.baseH; lab.x = textX; lab.w = s.labelW;
         lab.font = s.base; lab.color = kDim; lab.text = l.label;
-        lab.hasDot = true; lab.dot = SevCol(l.sev);
+        lab.hasDot = true; lab.dot = SevCol(l.sev); lab.hollow = l.na;
         s.rows.push_back(lab);
 
         Row val;
@@ -432,18 +433,27 @@ LRESULT CALLBACK DiagProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 
             for (const auto& r : s->rows) {
                 if (r.hasDot) {
-                    HBRUSH br = CreateSolidBrush(r.dot);
-                    HPEN pen = CreatePen(PS_NULL, 0, RGB(0, 0, 0));
-                    HGDIOBJ oldBr = SelectObject(mem, br);
-                    HGDIOBJ oldPen = SelectObject(mem, pen);
                     const int d = s->dotD;
-                    // 点垂直居中在「一行文字」的视觉中心
                     const int cy = r.y + r.h / 2 - d / 2;
-                    Ellipse(mem, s->pad, cy, s->pad + d + 1, cy + d + 1);
-                    SelectObject(mem, oldBr);
-                    SelectObject(mem, oldPen);
-                    DeleteObject(br);
-                    DeleteObject(pen);
+                    if (r.hollow) {
+                        HPEN ring = CreatePen(PS_SOLID, 1, r.dot);
+                        HGDIOBJ oldPen = SelectObject(mem, ring);
+                        HGDIOBJ oldBr = SelectObject(mem, GetStockObject(NULL_BRUSH));
+                        Ellipse(mem, s->pad, cy, s->pad + d + 1, cy + d + 1);
+                        SelectObject(mem, oldBr);
+                        SelectObject(mem, oldPen);
+                        DeleteObject(ring);
+                    } else {
+                        HBRUSH br = CreateSolidBrush(r.dot);
+                        HPEN pen = CreatePen(PS_NULL, 0, RGB(0, 0, 0));
+                        HGDIOBJ oldBr = SelectObject(mem, br);
+                        HGDIOBJ oldPen = SelectObject(mem, pen);
+                        Ellipse(mem, s->pad, cy, s->pad + d + 1, cy + d + 1);
+                        SelectObject(mem, oldBr);
+                        SelectObject(mem, oldPen);
+                        DeleteObject(br);
+                        DeleteObject(pen);
+                    }
                 }
                 RECT tr = { r.x, r.y, r.x + r.w, r.y + (r.h > 0 ? r.h : 0) };
                 UINT flags = DT_LEFT | DT_TOP |

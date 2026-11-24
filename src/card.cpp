@@ -252,8 +252,15 @@ void DrawCard(Graphics& g, const CardMetrics& m, const CardText& t, bool transpa
             const REAL w = bounds.Width;
             if (x + d + gapDot + w > maxX) break;   // 放不下就停，不画半截
 
-            SolidBrush sevBrush(SevColor(b.sev));
-            g.FillEllipse(&sevBrush, x, y + (h - d) / 2.0f, d, d);
+            if (b.na) {
+                // 空心 = 当前配置下这个检查不适用（例如没开隧道时问「隧道接管了吗」）
+                // 实心灰 = 测了但没测到。两者绝不能长得一样。
+                Pen ring(kDotIdle, 1.0f);
+                g.DrawEllipse(&ring, x, y + (h - d) / 2.0f, d, d);
+            } else {
+                SolidBrush sevBrush(SevColor(b.sev));
+                g.FillEllipse(&sevBrush, x, y + (h - d) / 2.0f, d, d);
+            }
             x += d + gapDot;
 
             RectF r(x, y, w + 4.0f, h);

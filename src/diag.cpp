@@ -46,6 +46,27 @@ std::wstring QueryResolverIp()
     return ip;
 }
 
+// DNS 解析器出口：一次本地 DNS 查询；解析器不在出口时再查一次它的归属。
+void ProbeDns(ProbeInput& out)
+{
+    const std::wstring rip = QueryResolverIp();
+    if (rip.empty()) return;
+
+    out.dnsChecked = true;
+    out.dnsResolverIp = rip;
+    if (rip == out.v4.ip) return;
+
+    std::string body;
+    std::wstring err;
+    if (!HttpGet(L"https://ipwho.is/" + rip, body, err, 3000)) return;
+    out.dnsResolverCountry = Utf8ToWide(JsonStr(body, "country_code"));
+    if (out.dnsResolverCountry.empty())
+        out.dnsResolverCountry = Utf8ToWide(JsonStr(body, "country"));
+    out.dnsResolverOrg = Utf8ToWide(JsonStr(body, "org"));
+    if (out.dnsResolverOrg.empty())
+        out.dnsResolverOrg = Utf8ToWide(JsonStr(body, "isp"));
+}
+
 std::wstring Trim(const std::wstring& s)
 {
     size_t a = 0, b = s.size();
@@ -85,8 +106,10 @@ long long JsonInt(const std::string& json, const std::string& key, bool& found)
 // ipwho.is：geo + connection(asn/org) + timezone.offset（秒）
 bool FillGeo(const std::string& json, ExitProbe& e)
 {
-    e.country = Utf8ToWide(JsonStr(json, "country"));
-    if (e.country.empty()) e.country = Utf8ToWide(JsonStr(json, "country_code"));
+    // 优先取国家码：DNS 那一行比的是国家码，两边必须同一套口径，
+    // 否则「China」和「CN」会被判成不同国。
+    e.country = Utf8ToWide(JsonStr(json, "country_code"));
+    if (e.country.empty()) e.country = Utf8ToWide(JsonStr(json, "country"));
     e.region = Utf8ToWide(JsonStr(json, "region"));
     e.city   = Utf8ToWide(JsonStr(json, "city"));
 
@@ -227,26 +250,7 @@ bool ProbeExits(const IpInfo& base, ProbeInput& out)
         else out.v6.err = err;
     }
 
-    // DNS 解析器出口：只多一次本地 DNS 查询；解析器不在出口时再查一次归属
-    {
-        const std::wstring rip = QueryResolverIp();
-        if (!rip.empty()) {
-            out.dnsChecked = true;
-            out.dnsResolverIp = rip;
-            if (rip != out.v4.ip) {
-                std::string body;
-                std::wstring err;
-                if (HttpGet(L"https://ipwho.is/" + rip, body, err, 3000)) {
-                    out.dnsResolverCountry = Utf8ToWide(JsonStr(body, "country_code"));
-                    if (out.dnsResolverCountry.empty())
-                        out.dnsResolverCountry = Utf8ToWide(JsonStr(body, "country"));
-                    out.dnsResolverOrg = Utf8ToWide(JsonStr(body, "org"));
-                    if (out.dnsResolverOrg.empty())
-                        out.dnsResolverOrg = Utf8ToWide(JsonStr(body, "isp"));
-                }
-            }
-        }
-    }
+    ProbeDns(out);
 
     return true;
 }
@@ -295,6 +299,8 @@ bool RunDiag(const std::wstring& outPath, std::wstring& err)
         in.v6.ok = false;
         in.v6.err = herr;
     }
+
+    ProbeDns(in);
 
     Diagnosis d = Diagnose(in);
     std::vector<Badge> badges = BuildBadges(d);

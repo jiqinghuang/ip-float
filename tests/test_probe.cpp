@@ -83,6 +83,7 @@ void TestClean()
     CheckW(d.summary, L"未发现泄漏", "clean: summary");
     Check(d.lines.size() == 8, "clean: 8 lines");
     CheckSev(d.Find(LineId::Tunnel)->sev, Sev::Ok, "clean: tunnel ok");
+    Check(!d.Find(LineId::Tunnel)->na, "clean: tunnel is applicable when TUN is on");
     CheckSev(d.Find(LineId::V6Route)->sev, Sev::Ok, "clean: v6 route ok");
     CheckSev(d.Find(LineId::ExitV6)->sev, Sev::Ok, "clean: exit v6 same as v4");
     CheckSev(d.Find(LineId::Proxy)->sev, Sev::Ok, "clean: proxy off");
@@ -186,6 +187,13 @@ void TestNoProxyV6Direct()
     CheckSev(d.Find(LineId::Tunnel)->sev, Sev::Skip, "novpn: tunnel skipped");
     CheckSev(d.Find(LineId::V6Route)->sev, Sev::Skip, "novpn: v6 direct is not a leak");
     CheckSev(d.verdict, Sev::Ok, "novpn: verdict ok");
+    // 「不适用」必须和「没测到」区分开，否则健康状态看起来像探测失败
+    Check(d.Find(LineId::Tunnel)->na, "novpn: tunnel marked not-applicable");
+    Check(d.Find(LineId::V6Route)->na, "novpn: v6 route marked not-applicable");
+    std::vector<Badge> b = BuildBadges(d);
+    Check(b[0].na, "novpn: TUN badge is hollow");
+    Check(b[1].na, "novpn: V6 badge is hollow");
+    Check(!b[2].na, "novpn: proxy badge is not hollow");
 }
 
 void TestBadges()
