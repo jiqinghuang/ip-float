@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <dwmapi.h>
 
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -47,6 +48,7 @@ struct DiagWin {
 
     HFONT base = nullptr, small = nullptr, strong = nullptr;
     HBRUSH bgBrush = nullptr;
+    HICON  blankIcon = nullptr;
 
     float      scale = 1.0f;
     Diagnosis  diag;
@@ -513,6 +515,7 @@ LRESULT CALLBACK DiagProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             const HWND app = s->app;
             FreeFonts(*s);
             if (s->bgBrush) DeleteObject(s->bgBrush);
+            if (s->blankIcon) DestroyIcon(s->blankIcon);
             g_win = nullptr;
             delete s;
             if (app) PostMessageW(app, WM_DIAG_CLOSED, 0, 0);
@@ -523,6 +526,43 @@ LRESULT CALLBACK DiagProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             break;
     }
     return DefWindowProcW(h, msg, wp, lp);
+}
+
+// 标题栏左侧那个位置系统一定会画东西：把 exe 的图标缩到 16x16 通常很糊。
+// 这里造一个全透明图标，等于让它只留背景色。
+HICON CreateBlankIcon(int size)
+{
+    BITMAPV5HEADER bi = {};
+    bi.bV5Size        = sizeof(bi);
+    bi.bV5Width       = size;
+    bi.bV5Height      = -size;          // 负数 = 自上而下
+    bi.bV5Planes      = 1;
+    bi.bV5BitCount    = 32;
+    bi.bV5Compression = BI_BITFIELDS;
+    bi.bV5RedMask     = 0x00FF0000;
+    bi.bV5GreenMask   = 0x0000FF00;
+    bi.bV5BlueMask    = 0x000000FF;
+    bi.bV5AlphaMask   = 0xFF000000;
+
+    HDC screen = GetDC(nullptr);
+    void* bits = nullptr;
+    HBITMAP color = CreateDIBSection(screen, (BITMAPINFO*)&bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    ReleaseDC(nullptr, screen);
+    if (!color) return nullptr;
+    if (bits) memset(bits, 0, (size_t)size * size * 4);   // alpha 全 0
+
+    std::vector<BYTE> maskBits(((size_t)(size + 15) / 16) * 2 * size, 0xFF);
+    HBITMAP mask = CreateBitmap(size, size, 1, 1, maskBits.data());
+
+    ICONINFO ii = {};
+    ii.fIcon    = TRUE;
+    ii.hbmMask  = mask;
+    ii.hbmColor = color;
+    HICON icon = CreateIconIndirect(&ii);
+
+    DeleteObject(color);
+    DeleteObject(mask);
+    return icon;
 }
 
 void RegisterClassOnce()
@@ -572,6 +612,16 @@ void ShowDiagWindow(HWND appHwnd, const Diagnosis& d, uint64_t at)
         return;
     }
     g_win = s;
+
+    // 标题栏图标换成全透明的，别让缩小的 exe 图标在那儿糊着
+    {
+        const int px = GetSystemMetrics(SM_CXSMICON);
+        s->blankIcon = CreateBlankIcon(px > 0 ? px : 16);
+        if (s->blankIcon) {
+            SendMessageW(h, WM_SETICON, ICON_SMALL, (LPARAM)s->blankIcon);
+            SendMessageW(h, WM_SETICON, ICON_BIG, (LPARAM)s->blankIcon);
+        }
+    }
 
     // 深色标题栏，跟内容区一致（Win11 用 20，旧版本用 19）
     {
