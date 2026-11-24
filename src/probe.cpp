@@ -99,20 +99,29 @@ Diagnosis Diagnose(const ProbeInput& in)
         Push(d, LineId::V6Route, L"IPv6 路由", L"已接管", Sev::Ok);
     }
 
-    // ── 系统代理 ──────────────────────────────────────────────────────
-    if (f.pacConfigured) {
-        Push(d, LineId::Proxy, L"系统代理", L"PAC 已配置", Sev::Warn,
-             L"AutoConfigURL 的优先级高于 ProxyServer");
-    } else if (!f.proxyConfigured) {
-        Push(d, LineId::Proxy, L"系统代理", L"未配置", Sev::Ok);
-    } else if (!f.proxyEnabled) {
-        Push(d, LineId::Proxy, L"系统代理", L"已关闭", Sev::Ok,
-             L"注册表仍留有 " + f.proxyServer + L"（未启用）");
-    } else if (tunnelInUse) {
-        Push(d, LineId::Proxy, L"系统代理", L"已开启（与 TUN 叠加）", Sev::Warn,
-             f.proxyServer + L"：冗余，且会让 DNS 行为分裂");
-    } else {
-        Push(d, LineId::Proxy, L"系统代理", L"已开启", Sev::Ok, f.proxyServer);
+    // ── 出口路径 ──────────────────────────────────────────────────────
+    // 这一行回答的不是「系统代理开关是几」，而是「我现在靠什么出去、有几条路」。
+    // 只报开关的话，四种组合里三种都是绿的，等于没有信息量。
+    {
+        // PAC 配了就算走代理：AutoConfigURL 的优先级高于 ProxyEnable
+        const bool proxyOn = f.proxyEnabled || f.pacConfigured;
+        const std::wstring proxyDesc = f.pacConfigured ? std::wstring(L"PAC 脚本")
+                                                       : f.proxyServer;
+
+        if (tunnelInUse && proxyOn) {
+            Push(d, LineId::Proxy, L"出口路径", L"TUN + 系统代理", Sev::Warn,
+                 proxyDesc + L"：两条路并存，冗余，且会让 DNS 行为分裂");
+        } else if (tunnelInUse) {
+            Push(d, LineId::Proxy, L"出口路径", L"TUN", Sev::Ok,
+                 L"全部流量走隧道；系统代理已关闭");
+        } else if (proxyOn) {
+            Push(d, LineId::Proxy, L"出口路径", L"系统代理", Sev::Ok,
+                 proxyDesc + L"：当前唯一出口（TUN 未接管）");
+        } else {
+            // 没有任何代理路径 —— 「会不会漏」这个问题不成立，不是「通过」
+            Push(d, LineId::Proxy, L"出口路径", L"直连", Sev::Skip,
+                 L"没有配置任何代理，也没有隧道；不涉及泄漏判定", /*na=*/true);
+        }
     }
 
     // ── IPv4 出口 ────────────────────────────────────────────────────
@@ -234,7 +243,7 @@ std::vector<Badge> BuildBadges(const Diagnosis& d)
 
     add(L"TUN",  LineId::Tunnel);
     add(L"V6",   LineId::V6Route);
-    add(L"代理", LineId::Proxy);
+    add(L"路径", LineId::Proxy);
     add(L"时区", LineId::Tz);
     add(L"DNS",  LineId::Dns);
     return out;

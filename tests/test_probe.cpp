@@ -86,7 +86,8 @@ void TestClean()
     Check(!d.Find(LineId::Tunnel)->na, "clean: tunnel is applicable when TUN is on");
     CheckSev(d.Find(LineId::V6Route)->sev, Sev::Ok, "clean: v6 route ok");
     CheckSev(d.Find(LineId::ExitV6)->sev, Sev::Ok, "clean: exit v6 same as v4");
-    CheckSev(d.Find(LineId::Proxy)->sev, Sev::Ok, "clean: proxy off");
+    CheckSev(d.Find(LineId::Proxy)->sev, Sev::Ok, "clean: path is TUN");
+    CheckW(d.Find(LineId::Proxy)->value, L"TUN", "clean: path value");
 }
 
 // 坑 1：v6 没被接管，但本机有公网 v6 —— 结构性泄漏
@@ -193,7 +194,7 @@ void TestNoProxyV6Direct()
     std::vector<Badge> b = BuildBadges(d);
     Check(b[0].na, "novpn: TUN badge is hollow");
     Check(b[1].na, "novpn: V6 badge is hollow");
-    Check(!b[2].na, "novpn: proxy badge is not hollow");
+    Check(b[2].na, "novpn: 路径 badge is hollow when nothing is configured");
 }
 
 void TestBadges()
@@ -204,7 +205,7 @@ void TestBadges()
     Check(b.size() == 5, "badges: 5 badges");
     CheckW(b[0].label, L"TUN", "badges: 0 is TUN");
     CheckW(b[1].label, L"V6", "badges: 1 is V6");
-    CheckW(b[2].label, L"代理", "badges: 2 is 代理");
+    CheckW(b[2].label, L"路径", "badges: 2 is 路径");
     CheckW(b[3].label, L"时区", "badges: 3 is 时区");
     CheckW(b[4].label, L"DNS", "badges: 4 is DNS");
     CheckSev(b[4].sev, Sev::Skip, "badges: DNS is skip before it is checked");

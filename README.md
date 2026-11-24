@@ -6,7 +6,7 @@
 
 <p align="center">
   <img src="preview-exe.png" width="640"
-       alt="ip-float 卡片：第一行 203.0.113.42 · JP Tokyo Chiyoda，第二行 AS20473 Vultr · 2分钟前，第三行五个绿色状态点 TUN / V6 / 代理 / 时区 / DNS">
+       alt="ip-float 卡片：第一行 203.0.113.42 · JP Tokyo Chiyoda，第二行 AS20473 Vultr · 2分钟前，第三行五个绿色状态点 TUN / V6 / 路径 / 时区 / DNS">
 </p>
 
 <p align="center"><sub>卡片本体 · 340×80 逻辑像素 · 离屏渲染（示例数据）</sub></p>
