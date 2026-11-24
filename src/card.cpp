@@ -18,13 +18,23 @@ const Color kDim    (255, 150, 156, 166);
 const Color kWarn   (255, 224, 175, 104);
 const Color kDotOk  (255, 158, 206, 106);
 const Color kDotIdle(255, 150, 156, 166);
+const Color kBad    (255, 247, 118, 142);   // 徽章「问题」色
 
 const int BASE_W = 340;
-const int BASE_H = 66;
+const int BASE_H = 80;   // 原 66；多一行徽章 +14
+
+Color SevColor(Sev s)
+{
+    switch (s) {
+        case Sev::Ok:   return kDotOk;
+        case Sev::Warn: return kWarn;
+        case Sev::Bad:  return kBad;
+        default:        return kDotIdle;   // Skip：没测/读不到，绝不能显示成通过
+    }
+}
 
 std::unique_ptr<Font> MakeFont(float px)
-{
-    auto f = std::make_unique<Font>(L"Microsoft YaHei UI", px, FontStyleRegular, UnitPixel);
+{    auto f = std::make_unique<Font>(L"Microsoft YaHei UI", px, FontStyleRegular, UnitPixel);
     if (f->GetLastStatus() != Ok) {
         // 非中文系统可能没有雅黑：GDI+ 不像 GDI 那样自动 fallback，必须自己兜一下
         f = std::make_unique<Font>(L"Segoe UI", px, FontStyleRegular, UnitPixel);
@@ -83,6 +93,7 @@ void WriteSidecar(const std::wstring& pngPath, const CardMetrics& m)
         L"    \"dim\": \"#969CA6\",\n"
         L"    \"warn\": \"#E0AF68\",\n"
         L"    \"dotOk\": \"#9ECE6A\",\n"
+        L"    \"dotBad\": \"#F7768E\",\n"
         L"    \"dotIdle\": \"#969CA6\"\n"
         L"  }\n"
         L"}\n";
@@ -106,11 +117,14 @@ CardMetrics ComputeCardMetrics(float scale)
 
     m.mainFontPx = ScalePx(15, scale);
     m.subFontPx = ScalePx(12, scale);
+    m.badgeFontPx = ScalePx(11, scale);
 
     m.line1 = CardRect{ ScalePx(26, scale), ScalePx(8, scale),
                         m.width - ScalePx(36, scale), ScalePx(21, scale) };
     m.line2 = CardRect{ ScalePx(26, scale), ScalePx(31, scale),
                         m.width - ScalePx(36, scale), ScalePx(20, scale) };
+    m.line3 = CardRect{ ScalePx(26, scale), ScalePx(55, scale),
+                        m.width - ScalePx(36, scale), ScalePx(16, scale) };
 
     m.radius = ScalePx(10, scale);
     return m;
@@ -189,7 +203,10 @@ void DrawCard(Graphics& g, const CardMetrics& m, const CardText& t, bool transpa
         g.Clear(kBg);
     }
 
-    Color dot = t.dot == DotState::Warn ? kWarn : (t.dot == DotState::Ok ? kDotOk : kDotIdle);
+    Color dot = t.dot == DotState::Bad  ? kBad
+              : t.dot == DotState::Warn ? kWarn
+              : t.dot == DotState::Ok   ? kDotOk
+                                        : kDotIdle;
     SolidBrush dotBrush(dot);
     g.FillEllipse(&dotBrush, (REAL)m.dotX, (REAL)m.dotY, (REAL)m.dotSize, (REAL)m.dotSize);
 
@@ -211,6 +228,39 @@ void DrawCard(Graphics& g, const CardMetrics& m, const CardText& t, bool transpa
     g.DrawString(t.main.c_str(), -1, fontMain.get(), r1, &fmt, &textBrush);
     if (!t.sub.empty())
         g.DrawString(t.sub.c_str(), -1, fontSub.get(), r2, &fmt, &subBrush);
+
+    // 第三行：徽章。圆点带颜色，文字统一灰色 —— 颜色是主信号，文字只是兜底
+    if (!t.badges.empty()) {
+        auto fontBadge = MakeFont((float)m.badgeFontPx);
+        StringFormat bf;
+        bf.SetAlignment(StringAlignmentNear);
+        bf.SetLineAlignment(StringAlignmentCenter);
+        bf.SetFormatFlags(StringFormatFlagsNoWrap);
+
+        const REAL y = (REAL)m.line3.y;
+        const REAL h = (REAL)m.line3.h;
+        const REAL d = (REAL)ScalePx(5, m.scale);
+        const REAL gapDot  = (REAL)ScalePx(3, m.scale);
+        const REAL gapItem = (REAL)ScalePx(11, m.scale);
+        const REAL maxX = (REAL)(m.line3.x + m.line3.w);
+        REAL x = (REAL)m.line3.x;
+
+        for (const auto& b : t.badges) {
+            RectF measure(0, 0, 1000.0f, h);
+            RectF bounds;
+            g.MeasureString(b.label.c_str(), -1, fontBadge.get(), measure, &bf, &bounds);
+            const REAL w = bounds.Width;
+            if (x + d + gapDot + w > maxX) break;   // 放不下就停，不画半截
+
+            SolidBrush sevBrush(SevColor(b.sev));
+            g.FillEllipse(&sevBrush, x, y + (h - d) / 2.0f, d, d);
+            x += d + gapDot;
+
+            RectF r(x, y, w + 4.0f, h);
+            g.DrawString(b.label.c_str(), -1, fontBadge.get(), r, &bf, &subBrush);
+            x += w + gapItem;
+        }
+    }
 
     GraphicsPath border;
     RoundedPath(border, 0.5f, 0.5f, (REAL)m.width - 1.0f, (REAL)m.height - 1.0f,

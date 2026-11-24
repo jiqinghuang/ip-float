@@ -5,10 +5,12 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "ipinfo.h"
+#include "probe.h"
 
-enum class DotState { Idle, Ok, Warn };
+enum class DotState { Idle, Ok, Warn, Bad };
 
 struct CardRect {
     int x = 0, y = 0, w = 0, h = 0;
@@ -19,8 +21,8 @@ struct CardMetrics {
     float    scale = 1.0f;
     int      width = 0, height = 0;
     int      dotX = 0, dotY = 0, dotSize = 0;
-    int      mainFontPx = 0, subFontPx = 0;
-    CardRect line1, line2;
+    int      mainFontPx = 0, subFontPx = 0, badgeFontPx = 0;
+    CardRect line1, line2, line3;
     int      radius = 0;      // 圆角半径（不是直径）
 };
 
@@ -29,6 +31,7 @@ struct CardText {
     std::wstring sub;
     bool         subWarn = false;
     DotState     dot = DotState::Idle;
+    std::vector<Badge> badges;   // 第三行；空 = 不画这一行
 };
 
 CardMetrics ComputeCardMetrics(float scale);

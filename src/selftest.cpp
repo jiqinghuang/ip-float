@@ -29,6 +29,30 @@ bool RenderDemoCard(const std::wstring& path, float scale, std::wstring& err)
     DemoCard d = MakeDemoCard(now);
     CardMetrics m = ComputeCardMetrics(scale);
     CardText t = BuildCardText(d.info, true, false, false, L"", d.updatedAt, now);
+
+    // 演示数据走一遍真实判定，让 --render 的图和实际卡片长得一样（网站素材靠它）
+    ProbeInput in;
+    in.facts.tunDefaultV4 = true;
+    in.facts.tunDefaultV6 = true;
+    in.facts.tunIfName = L"Wintun";
+    in.facts.hasPublicV6 = true;
+    in.facts.publicV6 = L"2001:db8::1";
+    in.facts.localOffsetMinutes = 540;
+    in.facts.proxyConfigured = false;
+    in.v4.ok = true;
+    in.v4.ip = d.info.ip;
+    in.v4.country = d.info.country;
+    in.v4.utcOffsetMinutes = 540;
+    in.v6.ok = true;
+    in.v6.ip = d.info.ip;
+    in.dnsChecked = true;
+    in.dnsResolverIp = L"1.1.1.1";
+
+    Diagnosis diag = Diagnose(in);
+    t.badges = BuildBadges(diag);
+    if (diag.verdict != Sev::Bad && diag.verdict != Sev::Skip)
+        t.dot = diag.verdict == Sev::Warn ? DotState::Warn : DotState::Ok;
+
     return RenderCardToPng(path, m, t, err);
 }
 

@@ -2,6 +2,7 @@
 
 #include "card.h"
 #include "config.h"
+#include "diag.h"
 #include "http.h"
 #include "ipinfo.h"
 #include "selftest.h"
@@ -11,6 +12,7 @@
 
 #include <windows.h>
 #include <process.h>
+#include <shellapi.h>
 
 #include <atomic>
 #include <cwchar>
@@ -34,11 +36,13 @@ const UINT ID_TIMER_TRAY_RETRY = 6;
 const UINT WM_APP_FETCHED  = WM_APP + 1;
 const UINT WM_APP_TRAY     = WM_APP + 2;
 const UINT WM_APP_ACTIVATE = WM_APP + 3;   // 第二个实例让第一个把卡片亮出来
+const UINT WM_APP_DIAG     = WM_APP + 4;   // 网络诊断跑完了
 
 enum {
     IDM_REFRESH = 100,
     IDM_INTERVAL_BASE = 200,
     IDM_SETTINGS = 300,
+    IDM_DIAG,
     IDM_COPY,
     IDM_TOPMOST,
     IDM_AUTOSTART,
@@ -62,6 +66,8 @@ struct FetchResult {
     IpInfo       info;
     std::wstring err;
     std::wstring errFull;
+    std::vector<Badge> badges;          // 卡片第三行
+    Sev          verdict = Sev::Skip;
 };
 
 struct App {
@@ -85,6 +91,8 @@ struct App {
     uint64_t     updatedAt = 0;
     std::wstring lastErrMsg;
     std::wstring lastErrFull;
+    std::vector<Badge> badges;
+    Sev          verdict = Sev::Skip;
 
     // 只有 UI 线程读写 busy；worker 不持有任何 App 指针，避免退出时 use-after-free
     std::atomic<bool> busy{ false };
@@ -126,6 +134,13 @@ unsigned __stdcall FetchThread(void* param)
     auto* result = new FetchResult();
     result->ok = FetchNow(job->sources, result->info, result->err, result->errFull);
 
+    // 出口探测只依赖「拿到的 IP」，所以抓取失败也照样能算（v4 会标成探测失败）
+    ProbeInput in;
+    ProbeExits(result->info, in);
+    Diagnosis diag = Diagnose(in);
+    result->badges = BuildBadges(diag);
+    result->verdict = diag.verdict;
+
     if (!PostMessageW(job->hwnd, WM_APP_FETCHED, 0, (LPARAM)result)) {
         // 窗口已经销毁（进程正在退出）：结果没人要了。
         // 不要回写任何 UI 状态——App 可能已经析构。
@@ -155,6 +170,33 @@ void StartFetch(App& app)
         delete job;
         app.busy.store(false);
     }
+}
+
+void StartDiag(App& app)
+{
+    struct Job { HWND hwnd = nullptr; };
+
+    auto* job = new Job();
+    job->hwnd = app.hwnd;
+
+    auto body = [](void* param) -> unsigned {
+        std::unique_ptr<Job> j((Job*)param);
+        struct Result {
+            bool         ok = false;
+            std::wstring path;
+            std::wstring err;
+        };
+        auto* r = new Result();
+        // 写在 exe 旁边：受限环境下 APPDATA / TEMP 可能写不进去
+        r->path = ExeDir() + L"\\ip-float-diag.txt";
+        r->ok = RunDiag(r->path, r->err);
+        if (!PostMessageW(j->hwnd, WM_APP_DIAG, 0, (LPARAM)r)) delete r;
+        return 0;
+    };
+
+    HANDLE t = (HANDLE)_beginthreadex(nullptr, 0, body, job, 0, nullptr);
+    if (t) CloseHandle(t);
+    else delete job;
 }
 
 void PersistConfig(App& app)
@@ -318,6 +360,14 @@ void Paint(App& app)
         CardMetrics m = ComputeCardMetrics(app.scale);
         CardText t = BuildCardText(app.info, app.hasInfo, app.lastError, app.timerWarn,
                                    app.lastErrMsg, app.updatedAt, NowFileTime());
+        t.badges = app.badges;
+        // 总判定覆盖圆点：有徽章时以诊断结论为准（抓取失败时保留原来的错误提示）
+        if (!app.badges.empty() && !app.lastError) {
+            t.dot = app.verdict == Sev::Bad  ? DotState::Bad
+                  : app.verdict == Sev::Warn ? DotState::Warn
+                  : app.verdict == Sev::Ok   ? DotState::Ok
+                                             : DotState::Idle;
+        }
         DrawCard(g, m, t, false);
     }
     BitBlt(hdc, 0, 0, w, h, mem, 0, 0, SRCCOPY);
@@ -370,6 +420,7 @@ void BuildMenu(App& app, HMENU menu, bool fromTray)
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)sub, L"刷新间隔");
 
     AppendMenuW(menu, MF_STRING, IDM_SETTINGS, L"设置…");
+    AppendMenuW(menu, MF_STRING, IDM_DIAG, L"网络诊断…");
     AppendMenuW(menu, MF_STRING, IDM_COPY, L"复制 IP");
     AppendMenuW(menu, MF_STRING | (app.cfg.topMost ? MF_CHECKED : 0),
                 IDM_TOPMOST, L"总在最前");
@@ -449,6 +500,8 @@ void AppOnFetched(App& app, FetchResult* r)
             app.lastErrMsg = r->err;
             app.lastErrFull = r->errFull;
         }
+        app.badges = r->badges;
+        app.verdict = r->verdict;
         delete r;
     }
 
@@ -535,6 +588,23 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         return 0;
 
+    case WM_APP_DIAG: {
+        struct Result {
+            bool         ok = false;
+            std::wstring path;
+            std::wstring err;
+        };
+        std::unique_ptr<Result> r((Result*)lp);
+        if (!r) return 0;
+        if (r->ok) {
+            ShellExecuteW(nullptr, L"open", r->path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        } else {
+            std::wstring msg = L"网络诊断失败：\n" + r->err;
+            MessageBoxW(hwnd, msg.c_str(), L"网络诊断", MB_ICONWARNING | MB_OK);
+        }
+        return 0;
+    }
+
     case WM_APP_FETCHED:
         AppOnFetched(*app, (FetchResult*)lp);
         return 0;
@@ -568,6 +638,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             SetInterval(*app, kIntervals[id - IDM_INTERVAL_BASE]);
         } else if (id == IDM_SETTINGS) {
             ShowSettings(*app);
+        } else if (id == IDM_DIAG) {
+            StartDiag(*app);
         } else if (id == IDM_COPY) {
             CopyIp(*app);
         } else if (id == IDM_TOPMOST) {
@@ -640,6 +712,8 @@ int RunApp(const AppOptions& opt)
     App app;
     app.opt = opt;
     app.inst = GetModuleHandleW(nullptr);
+    // 先摆一排灰徽章：首轮探测完成前卡片不空着，也避免高度变化带来的跳动
+    app.badges = BuildBadges(Diagnosis());
 
     // 自检/截图模式只读配置：--demo、--shot、--shot-dlg 都不写回用户设置
     const bool selfTest = opt.demo || !opt.shotPath.empty() || !opt.dlgShotPath.empty();
