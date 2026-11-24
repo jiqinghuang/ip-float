@@ -96,6 +96,7 @@ struct App {
     Sev          verdict = Sev::Skip;
     Diagnosis    diag;
     uint64_t     diagAt = 0;
+    bool         pendingPanelOpen = false;   // 等第一轮数据到了再开面板，避免空窗口闪跳
 
     // 只有 UI 线程读写 busy；worker 不持有任何 App 指针，避免退出时 use-after-free
     std::atomic<bool> busy{ false };
@@ -506,8 +507,13 @@ void AppOnFetched(App& app, FetchResult* r)
 
     InvalidateRect(app.hwnd, nullptr, FALSE);
 
-    if (DiagWindowOpen())
+    if (DiagWindowOpen()) {
         UpdateDiagWindow(app.diag, app.diagAt);
+    } else if (app.pendingPanelOpen) {
+        // 上次退出时面板是开着的：现在有数据了，一次性把正确尺寸开出来
+        app.pendingPanelOpen = false;
+        ShowDiagWindow(app.hwnd, app.diag, app.diagAt);
+    }
 
     if (!app.opt.shotPath.empty() && !app.shotDone) {
         app.shotDone = true;
@@ -809,8 +815,9 @@ int RunApp(const AppOptions& opt)
         StartFetch(app);
         ResetRefreshTimer(app);
         SetTimer(hwnd, ID_TIMER_TICK, 30000, nullptr);
-        // 上次退出时诊断窗口是开着的 —— 恢复它，数据跟着本轮抓取填进来
-        if (app.cfg.panelOpen) ShowDiagWindow(hwnd, app.diag, app.diagAt);
+        // 上次退出时诊断窗口是开着的 —— 等第一轮抓取完成再开，
+        // 否则会先弹出一个只有「结论」两行的空窗口，几秒后再跳成完整高度
+        if (app.cfg.panelOpen) app.pendingPanelOpen = true;
     }
 
     MSG msg;

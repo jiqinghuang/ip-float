@@ -184,6 +184,16 @@ void Rebuild(DiagWin& s)
     }
     y += s.gap;
 
+    // 还没有数据（首次打开且抓取未完成）：给一行占位，别显示一个空壳
+    if (s.diag.lines.empty()) {
+        Row r;
+        r.y = y; r.h = s.baseH; r.x = textX;
+        r.w = W - s.pad - r.x;
+        r.font = s.base; r.color = kDim; r.text = L"正在检测…";
+        s.rows.push_back(r);
+        y += s.baseH;
+    }
+
     // 分组
     int curGroup = -1;
     for (const auto& l : s.diag.lines) {
