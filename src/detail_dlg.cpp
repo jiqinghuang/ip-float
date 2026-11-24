@@ -1,5 +1,6 @@
 #include "detail_dlg.h"
 
+#include "card.h"
 #include "util.h"
 
 #include <windows.h>
@@ -136,17 +137,16 @@ void FreeFonts(DiagWin& s)
     if (s.strong) { DeleteObject(s.strong); s.strong = nullptr; }
 }
 
-// 一次算清所有行与客户端尺寸；绘制只按算好的坐标画，不再做任何测量
-void Rebuild(DiagWin& s)
+void BuildFonts(DiagWin& s)
 {
-    HDC dc = GetDC(s.hwnd);
-    if (!dc) return;
-
     FreeFonts(s);
     s.base   = MakeFont(ScalePx(15, s.scale), false);
     s.small  = MakeFont(ScalePx(13, s.scale), false);
     s.strong = MakeFont(ScalePx(15, s.scale), true);
+}
 
+void LayoutRows(DiagWin& s, HDC dc)
+{
     s.pad      = ScalePx(24, s.scale);
     s.gap      = ScalePx(16, s.scale);
     s.gapSmall = ScalePx(7, s.scale);
@@ -158,6 +158,7 @@ void Rebuild(DiagWin& s)
 
     s.baseH  = TextLineH(dc, s.base);
     s.smallH = TextLineH(dc, s.small);
+
 
     s.rows.clear();
     const int W = s.contentW;
@@ -257,7 +258,15 @@ void Rebuild(DiagWin& s)
     s.btnTop = y;
     y += s.btnH + s.pad / 2;
     s.clientH = y;
+}
 
+// 一次算清所有行与客户端尺寸；绘制只按算好的坐标画，不再做任何测量
+void Rebuild(DiagWin& s)
+{
+    HDC dc = GetDC(s.hwnd);
+    if (!dc) return;
+    BuildFonts(s);
+    LayoutRows(s, dc);
     ReleaseDC(s.hwnd, dc);
 }
 
@@ -356,6 +365,61 @@ void CopyToClipboard(HWND owner, const std::wstring& text)
     CloseClipboard();
 }
 
+// 行绘制：窗口和离屏渲染共用同一段代码，避免两处画得不一样
+void PaintContent(HDC mem, const DiagWin& s)
+{
+    for (const auto& r : s.rows) {
+        if (r.hasDot) {
+            const int d = s.dotD;
+            const int cy = r.y + r.h / 2 - d / 2;
+            if (r.hollow) {
+                HPEN ring = CreatePen(PS_SOLID, 1, r.dot);
+                HGDIOBJ oldPen = SelectObject(mem, ring);
+                HGDIOBJ oldBr = SelectObject(mem, GetStockObject(NULL_BRUSH));
+                Ellipse(mem, s.pad, cy, s.pad + d + 1, cy + d + 1);
+                SelectObject(mem, oldBr);
+                SelectObject(mem, oldPen);
+                DeleteObject(ring);
+            } else {
+                HBRUSH br = CreateSolidBrush(r.dot);
+                HPEN pen = CreatePen(PS_NULL, 0, RGB(0, 0, 0));
+                HGDIOBJ oldBr = SelectObject(mem, br);
+                HGDIOBJ oldPen = SelectObject(mem, pen);
+                Ellipse(mem, s.pad, cy, s.pad + d + 1, cy + d + 1);
+                SelectObject(mem, oldBr);
+                SelectObject(mem, oldPen);
+                DeleteObject(br);
+                DeleteObject(pen);
+            }
+        }
+        RECT tr = { r.x, r.y, r.x + r.w, r.y + (r.h > 0 ? r.h : 0) };
+        UINT flags = DT_LEFT | DT_TOP |
+                     (r.wrap ? DT_WORDBREAK : (DT_SINGLELINE | DT_END_ELLIPSIS));
+        DrawTextIn(mem, r.font ? r.font : s.base, r.color, tr, r.text, flags);
+    }
+}
+
+// 离屏渲染里的三个按钮：和窗口里的 owner-draw 长得一样
+void PaintStaticButtons(HDC dc, const DiagWin& s)
+{
+    const int right = s.contentW - s.pad;
+    const int gap = ScalePx(10, s.scale);
+    const wchar_t* labels[3] = { L"刷新", L"复制", L"关闭" };
+    const int xs[3] = { right - s.btnW * 3 - gap * 2,
+                        right - s.btnW * 2 - gap,
+                        right - s.btnW };
+    for (int i = 0; i < 3; ++i) {
+        RECT rc = { xs[i], s.btnTop, xs[i] + s.btnW, s.btnTop + s.btnH };
+        HBRUSH bg = CreateSolidBrush(kBtnBg);
+        FillRect(dc, &rc, bg);
+        DeleteObject(bg);
+        HBRUSH bd = CreateSolidBrush(kBorder);
+        FrameRect(dc, &rc, bd);
+        DeleteObject(bd);
+        DrawTextIn(dc, s.base, kText, rc, labels[i], DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+}
+
 void PaintButton(const DRAWITEMSTRUCT* dis)
 {
     if (!dis || !g_win) return;
@@ -443,35 +507,7 @@ LRESULT CALLBACK DiagProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             HGDIOBJ oldBmp = SelectObject(mem, bmp);
             FillRect(mem, &rc, s->bgBrush);
 
-            for (const auto& r : s->rows) {
-                if (r.hasDot) {
-                    const int d = s->dotD;
-                    const int cy = r.y + r.h / 2 - d / 2;
-                    if (r.hollow) {
-                        HPEN ring = CreatePen(PS_SOLID, 1, r.dot);
-                        HGDIOBJ oldPen = SelectObject(mem, ring);
-                        HGDIOBJ oldBr = SelectObject(mem, GetStockObject(NULL_BRUSH));
-                        Ellipse(mem, s->pad, cy, s->pad + d + 1, cy + d + 1);
-                        SelectObject(mem, oldBr);
-                        SelectObject(mem, oldPen);
-                        DeleteObject(ring);
-                    } else {
-                        HBRUSH br = CreateSolidBrush(r.dot);
-                        HPEN pen = CreatePen(PS_NULL, 0, RGB(0, 0, 0));
-                        HGDIOBJ oldBr = SelectObject(mem, br);
-                        HGDIOBJ oldPen = SelectObject(mem, pen);
-                        Ellipse(mem, s->pad, cy, s->pad + d + 1, cy + d + 1);
-                        SelectObject(mem, oldBr);
-                        SelectObject(mem, oldPen);
-                        DeleteObject(br);
-                        DeleteObject(pen);
-                    }
-                }
-                RECT tr = { r.x, r.y, r.x + r.w, r.y + (r.h > 0 ? r.h : 0) };
-                UINT flags = DT_LEFT | DT_TOP |
-                             (r.wrap ? DT_WORDBREAK : (DT_SINGLELINE | DT_END_ELLIPSIS));
-                DrawTextIn(mem, r.font ? r.font : s->base, r.color, tr, r.text, flags);
-            }
+            PaintContent(mem, *s);
 
             BitBlt(dc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);
             SelectObject(mem, oldBmp);
@@ -665,4 +701,69 @@ void CloseDiagWindow()
     HWND h = g_win->hwnd;
     g_win->app = nullptr;      // 别再回发 WM_DIAG_CLOSED，进程正在退出
     DestroyWindow(h);
+}
+
+// -mwindows 没有控制台：自检结果只能落在图片旁边（UTF-16LE，和 card.cpp 的格式一致）
+void WriteSelfTestLog(const std::wstring& imagePath, const std::wstring& msg)
+{
+    HANDLE f = CreateFileW((imagePath + L".log").c_str(), GENERIC_WRITE, 0, nullptr,
+                           CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return;
+    DWORD written = 0;
+    WriteFile(f, msg.c_str(), (DWORD)(msg.size() * sizeof(wchar_t)), &written, nullptr);
+    CloseHandle(f);
+}
+
+bool RenderDiagToPng(const std::wstring& path, float scale, const Diagnosis& d, uint64_t at,
+                     std::wstring& err)
+{
+    if (scale <= 0.0f) scale = 2.0f;
+
+    DiagWin s;
+    s.scale = scale;
+    s.diag = d;
+    s.at = at;
+
+    HDC screen = GetDC(nullptr);
+    if (!screen) {
+        err = L"取屏幕 DC 失败";
+        WriteSelfTestLog(path, L"render-dlg FAILED: " + err);
+        return false;
+    }
+    BuildFonts(s);
+    LayoutRows(s, screen);
+    ReleaseDC(nullptr, screen);
+
+    Gdiplus::Bitmap bmp(s.contentW, s.clientH, PixelFormat32bppARGB);
+    if (bmp.GetLastStatus() != Gdiplus::Ok) {
+        FreeFonts(s);
+        err = L"创建位图失败";
+        WriteSelfTestLog(path, L"render-dlg FAILED: " + err);
+        return false;
+    }
+
+    Gdiplus::Graphics g(&bmp);
+    HDC mem = g.GetHDC();
+    if (!mem) {
+        FreeFonts(s);
+        err = L"取位图 DC 失败";
+        WriteSelfTestLog(path, L"render-dlg FAILED: " + err);
+        return false;
+    }
+
+    RECT rc = { 0, 0, s.contentW, s.clientH };
+    HBRUSH bg = CreateSolidBrush(kBg);
+    FillRect(mem, &rc, bg);
+    DeleteObject(bg);
+
+    SetBkMode(mem, TRANSPARENT);
+    PaintContent(mem, s);
+    PaintStaticButtons(mem, s);
+
+    g.ReleaseHDC(mem);
+    FreeFonts(s);
+
+    const bool ok = SavePngToFile(bmp, path, err);
+    WriteSelfTestLog(path, ok ? L"rendered" : (L"render-dlg FAILED: " + err));
+    return ok;
 }

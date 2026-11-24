@@ -21,3 +21,8 @@ void SetDiagBusy(bool busy);
 
 bool DiagWindowOpen();
 void CloseDiagWindow();
+
+// 离屏把诊断面板画成 PNG（不建窗口、不读系统、不碰配置）。
+// 网页素材靠它：和窗口用同一段排版与绘制代码，不会两边长得不一样。
+bool RenderDiagToPng(const std::wstring& path, float scale, const Diagnosis& d, uint64_t at,
+                     std::wstring& err);

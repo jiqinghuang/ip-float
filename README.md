@@ -15,7 +15,7 @@ AS20473 Vultr · 2分钟前
 
 |路径|说明|
 |-|-|
-|**`ip-float.exe`**|★ 成品（当前 **v3.2.0**，约 940 KB）。单文件、双击即开、零运行时依赖。**不进 git**，分发走 [Releases](https://github.com/jiqinghuang/ip-float/releases/latest)|
+|**`ip-float.exe`**|★ 成品（当前 **v3.2.0**，约 948 KB）。单文件、双击即开、零运行时依赖。**不进 git**，分发走 [Releases](https://github.com/jiqinghuang/ip-float/releases/latest)|
 |`src/`|C++ 源码（按职责拆分）+ 图标 + `build.ps1` / `sign.ps1`|
 |`tests/`|纯逻辑单测（`build.ps1 -Test`）|
 |`.site-assets/`|网站素材生成 / 站点页面校验|
@@ -73,6 +73,7 @@ ip-float.exe --ini D:\tmp\ip-float.ini           # 固定用某份配置
 ```powershell
 ip-float.exe --render out\card.png --render-scale 2   # 离屏渲染卡片（不联网、不建窗、不读写配置）
 ip-float.exe --diag out\diag.txt                      # 出口体检报告（.txt + .json），不建窗口
+ip-float.exe --render-dlg out\diag.png --render-scale 2  # 离屏渲染诊断面板（演示数据）
 ip-float.exe --demo --shot out\card-screen.png        # 屏幕抓图 smoke test（演示数据）
 ip-float.exe --demo --shot-dlg out\dlg.png            # 设置窗口抓图
 ```
@@ -251,7 +252,7 @@ python .site-assets\validate.py --site-root ..\jiqinghuang.github.io
   所以裁边那一步假设**桌面是浅色**的；深色壁纸请先换一张浅色壁纸再跑。
 * 两次都传 `--ini build\ip-float.ini`，配置完全隔离，不会读写 `%APPDATA%` 里的真实配置。
 
-产物在 `.site-assets\out\`（4 个文件），拷到站点仓库的 `assets/ip-float/`。
+产物在 `.site-assets\out\`（card / diag / settings 各一张 png + webp），拷到站点仓库的 `assets/ip-float/`。
 依赖 Pillow：`pip install pillow`。
 
 ## 已知限制
@@ -274,5 +275,5 @@ python .site-assets\validate.py --site-root ..\jiqinghuang.github.io
 * 仓库已接上 git（`origin` = `https://github.com/jiqinghuang/ip-float.git`）；
   改源码时顺手多提交几次，别攒成一个大 commit —— 出问题才有得回退。
 * **`ip-float.exe` 不进仓库**：分发走 [GitHub Releases](https://github.com/jiqinghuang/ip-float/releases/latest)，
-  下载链接固定为 `/releases/latest`。重编一次哈希就变一次，把 940 KB 的二进制反复写进 git
+  下载链接固定为 `/releases/latest`。重编一次哈希就变一次，把 948 KB 的二进制反复写进 git
   历史没有意义。`build.ps1` 默认输出到仓库根目录，但 `dist/` 和 `ip-float.exe` 都被忽略。

@@ -49,4 +49,7 @@ bool RenderCardToPng(const std::wstring& path, const CardMetrics& m, const CardT
 // 屏幕抓窗口（--shot / --shot-dlg 自检用），并写 .log
 bool CaptureWindowToPng(HWND hwnd, const std::wstring& path, std::wstring& err);
 
+// 把一张 GDI+ 位图存成 PNG（诊断窗口离屏渲染也用这个）
+bool SavePngToFile(Gdiplus::Bitmap& bmp, const std::wstring& path, std::wstring& err);
+
 void RoundedPath(Gdiplus::GraphicsPath& p, float x, float y, float w, float h, float r);

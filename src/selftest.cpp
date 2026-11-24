@@ -23,14 +23,11 @@ DemoCard MakeDemoCard(uint64_t now)
     return d;
 }
 
-bool RenderDemoCard(const std::wstring& path, float scale, std::wstring& err)
-{
-    uint64_t now = NowFileTime();
-    DemoCard d = MakeDemoCard(now);
-    CardMetrics m = ComputeCardMetrics(scale);
-    CardText t = BuildCardText(d.info, true, false, false, L"", d.updatedAt, now);
+namespace {
 
-    // 演示数据走一遍真实判定，让 --render 的图和实际卡片长得一样（网站素材靠它）
+// 演示场景：TUN 接管 v4+v6、双栈出口同源、时区一致、DNS 走公共解析器 —— 全绿
+ProbeInput DemoProbeInput(const IpInfo& info)
+{
     ProbeInput in;
     in.facts.tunDefaultV4 = true;
     in.facts.tunDefaultV6 = true;
@@ -39,18 +36,43 @@ bool RenderDemoCard(const std::wstring& path, float scale, std::wstring& err)
     in.facts.publicV6 = L"2001:db8::1";
     in.facts.localOffsetMinutes = 540;
     in.facts.proxyConfigured = false;
+
     in.v4.ok = true;
-    in.v4.ip = d.info.ip;
-    in.v4.country = d.info.country;
+    in.v4.ip = info.ip;
+    in.v4.country = info.country;
+    in.v4.region = info.region;
+    in.v4.city = info.city;
+    in.v4.asn = info.asn;
+    in.v4.org = info.org;
+    in.v4.isHosting = true;
     in.v4.utcOffsetMinutes = 540;
+
     in.v6.ok = true;
-    in.v6.ip = d.info.ip;
+    in.v6.ip = info.ip;
+
     in.dnsChecked = true;
     in.dnsResolverIp = L"1.1.1.1";
-    in.dnsResolverCountry = L"US";      // 和示例出口同国，徽章才是绿的
+    in.dnsResolverCountry = L"US";
     in.dnsResolverOrg = L"Cloudflare";
+    return in;
+}
 
-    Diagnosis diag = Diagnose(in);
+} // namespace
+
+Diagnosis MakeDemoDiagnosis(uint64_t now)
+{
+    return Diagnose(DemoProbeInput(MakeDemoCard(now).info));
+}
+
+bool RenderDemoCard(const std::wstring& path, float scale, std::wstring& err)
+{
+    uint64_t now = NowFileTime();
+    DemoCard d = MakeDemoCard(now);
+    CardMetrics m = ComputeCardMetrics(scale);
+    CardText t = BuildCardText(d.info, true, false, false, L"", d.updatedAt, now);
+
+    // 演示数据走一遍真实判定，让 --render 的图和实际卡片长得一样（网站素材靠它）
+    Diagnosis diag = MakeDemoDiagnosis(now);
     t.badges = BuildBadges(diag);
     if (diag.verdict != Sev::Bad && diag.verdict != Sev::Skip)
         t.dot = diag.verdict == Sev::Warn ? DotState::Warn : DotState::Ok;

@@ -276,6 +276,20 @@ void DrawCard(Graphics& g, const CardMetrics& m, const CardText& t, bool transpa
     g.DrawPath(&pen, &border);
 }
 
+bool SavePngToFile(Bitmap& bmp, const std::wstring& path, std::wstring& err)
+{
+    CLSID png = {};
+    if (GetEncoderClsid(L"image/png", &png) < 0) {
+        err = L"系统没有 PNG 编码器";
+        return false;
+    }
+    if (bmp.Save(path.c_str(), &png, nullptr) != Ok) {
+        err = L"保存 PNG 失败（路径不可写？）";
+        return false;
+    }
+    return true;
+}
+
 bool RenderCardToPng(const std::wstring& path, const CardMetrics& m, const CardText& t,
                      std::wstring& err)
 {
@@ -291,14 +305,7 @@ bool RenderCardToPng(const std::wstring& path, const CardMetrics& m, const CardT
         DrawCard(g, m, t, true);
     }
 
-    CLSID png = {};
-    if (GetEncoderClsid(L"image/png", &png) < 0) {
-        err = L"系统没有 PNG 编码器";
-        WriteLog(path, L"render FAILED: " + err);
-        return false;
-    }
-    if (bmp.Save(path.c_str(), &png, nullptr) != Ok) {
-        err = L"保存 PNG 失败（路径不可写？）";
+    if (!SavePngToFile(bmp, path, err)) {
         WriteLog(path, L"render FAILED: " + err);
         return false;
     }

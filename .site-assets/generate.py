@@ -17,7 +17,7 @@
 
 用法（在 ip-float 仓库根目录）：
     python .site-assets/generate.py
-然后把 out/ 里的 4 个文件拷到站点仓库的 assets/ip-float/。
+然后把 out/ 里的文件拷到站点仓库的 assets/ip-float/（card / diag / settings 各 png+webp）。
 依赖 Pillow：pip install pillow
 """
 import json
@@ -86,6 +86,9 @@ def capture():
     print(f"  card sidecar   {meta['width']}x{meta['height']} "
           f"scale={meta['scale']:g} radius={meta['cornerRadius']}")
 
+    # 诊断面板同样走离屏渲染：演示数据、不联网、不暴露真实 IP
+    run(["--render-dlg", "diag.png", "--render-scale", str(RENDER_SCALE)], "diag.png", BUILD)
+
     run(["--demo", "--shot-dlg", "settings.png", "--ini", ini], "settings.png", BUILD)
 
 
@@ -101,6 +104,12 @@ def process():
     card.save(os.path.join(OUT, "card.png"))
     card.save(os.path.join(OUT, "card.webp"), quality=92, method=6)
     print(f"card.png     {card.width}x{card.height}")
+
+    # ── 诊断面板：离屏渲染，不透明，直接转 webp ───────────────────────
+    dlg = Image.open(os.path.join(BUILD, "diag.png")).convert("RGB")
+    dlg.save(os.path.join(OUT, "diag.png"))
+    dlg.save(os.path.join(OUT, "diag.webp"), quality=92, method=6)
+    print(f"diag.png     {dlg.width}x{dlg.height}")
 
     # ── 设置窗口：先裁掉不可见边框，再按内容推导逐行边界 ─────────────
     st = Image.open(os.path.join(BUILD, "settings.png")).convert("RGB")

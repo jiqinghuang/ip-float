@@ -5,8 +5,10 @@
 #include <string>
 
 #include "app.h"
+#include "detail_dlg.h"
 #include "diag.h"
 #include "selftest.h"
+#include "util.h"
 
 using namespace Gdiplus;
 
@@ -32,7 +34,7 @@ bool TakeArg(int argc, LPWSTR* argv, int& i, std::wstring& out)
 }
 
 bool ParseArgs(AppOptions& opt, std::wstring& renderPath, float& renderScale,
-               std::wstring& diagPath)
+               std::wstring& diagPath, std::wstring& renderDlgPath)
 {
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -47,6 +49,8 @@ bool ParseArgs(AppOptions& opt, std::wstring& renderPath, float& renderScale,
             ok = TakeArg(argc, argv, i, opt.shotPath);
         } else if (a == L"--shot-dlg") {
             ok = TakeArg(argc, argv, i, opt.dlgShotPath);
+        } else if (a == L"--render-dlg") {
+            ok = TakeArg(argc, argv, i, renderDlgPath);
         } else if (a == L"--diag") {
             ok = TakeArg(argc, argv, i, diagPath);
         } else if (a == L"--render") {
@@ -78,6 +82,9 @@ bool ParseArgs(AppOptions& opt, std::wstring& renderPath, float& renderScale,
     if (!diagPath.empty() &&
         (!renderPath.empty() || !opt.shotPath.empty() || !opt.dlgShotPath.empty()))
         return false;   // --diag 是独立模式，不和截图/渲染混用
+    if (!renderDlgPath.empty() &&
+        (!renderPath.empty() || !diagPath.empty() || !opt.shotPath.empty() || !opt.dlgShotPath.empty()))
+        return false;   // --render-dlg 也是独立模式
 
     // 设置窗口抓图永远用演示数据；屏幕卡片抓图默认也走演示，
     // 只有显式给了 --source 才去取真实数据。
@@ -99,8 +106,9 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     AppOptions opt;
     std::wstring renderPath;
     std::wstring diagPath;
+    std::wstring renderDlgPath;
     float renderScale = 2.0f;
-    if (!ParseArgs(opt, renderPath, renderScale, diagPath)) return 2;
+    if (!ParseArgs(opt, renderPath, renderScale, diagPath, renderDlgPath)) return 2;
 
     GdiplusStartupInput gdiIn;
     ULONG_PTR gdiToken = 0;
@@ -110,6 +118,11 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     if (!renderPath.empty()) {
         std::wstring err;
         rc = selftest::RenderDemoCard(renderPath, renderScale, err) ? 0 : 1;
+    } else if (!renderDlgPath.empty()) {
+        std::wstring err;
+        const uint64_t now = NowFileTime();
+        const Diagnosis d = selftest::MakeDemoDiagnosis(now);
+        rc = RenderDiagToPng(renderDlgPath, renderScale, d, now, err) ? 0 : 1;
     } else if (!diagPath.empty()) {
         std::wstring err;
         rc = RunDiag(diagPath, err) ? 0 : 1;
