@@ -43,6 +43,7 @@ struct ProbeInput {
     std::wstring dnsResolverIp;
     std::wstring dnsResolverCountry;   // 解析器出口 IP 的归属国（可能为空）
     std::wstring dnsResolverOrg;       // 解析器出口 IP 的运营商，用来识别公共 DNS
+    std::wstring dnsError;             // 查询失败时的原因（错误码），空 = 没失败
 };
 
 struct Diagnosis {

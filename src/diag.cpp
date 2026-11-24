@@ -25,12 +25,12 @@ const wchar_t* kUrlGeo = L"https://ipwho.is/";
 
 // 用 Akamai 的 whoami 反查「我这台机器的 DNS 解析器出口 IP」：
 // whoami.akamai.net 的 A 记录是按查询来源应答的，返回的就是递归解析器的地址。
-std::wstring QueryResolverIp()
+std::wstring QueryResolverIp(DNS_STATUS& status)
 {
     DNS_RECORDW* rec = nullptr;
-    const DNS_STATUS st = DnsQuery_W(L"whoami.akamai.net", DNS_TYPE_A,
-                                     DNS_QUERY_BYPASS_CACHE, nullptr, &rec, nullptr);
-    if (st != 0 || !rec) return std::wstring();
+    status = DnsQuery_W(L"whoami.akamai.net", DNS_TYPE_A,
+                        DNS_QUERY_BYPASS_CACHE, nullptr, &rec, nullptr);
+    if (status != 0 || !rec) return std::wstring();
 
     std::wstring ip;
     const ULONG addr = rec->Data.A.IpAddress;     // 网络字节序
@@ -83,8 +83,17 @@ bool ProbeV6Tcp(const wchar_t* addr, int port, int timeoutMs)
 // DNS 解析器出口：一次本地 DNS 查询；解析器不在出口时再查一次它的归属。
 void ProbeDns(ProbeInput& out)
 {
-    const std::wstring rip = QueryResolverIp();
-    if (rip.empty()) return;
+    // 这一项失败就整行标"未检测"，代价太高，所以偶发失败重试一次
+    DNS_STATUS st = 0;
+    std::wstring rip;
+    for (int attempt = 0; attempt < 2 && rip.empty(); ++attempt)
+        rip = QueryResolverIp(st);
+
+    if (rip.empty()) {
+        out.dnsChecked = true;                 // 查了，只是没查到 —— 不是"跳过"
+        out.dnsError = L"DnsQuery 失败，错误码 " + std::to_wstring((long)st);
+        return;
+    }
 
     out.dnsChecked = true;
     out.dnsResolverIp = rip;

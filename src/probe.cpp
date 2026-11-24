@@ -179,9 +179,11 @@ Diagnosis Diagnose(const ProbeInput& in)
     }
 
     // ── DNS ──────────────────────────────────────────────────────────
-    if (!in.dnsChecked || in.dnsResolverIp.empty()) {
-        Push(d, LineId::Dns, L"DNS", L"未检测", Sev::Skip,
-             in.dnsChecked ? L"解析器地址查询失败" : std::wstring());
+    if (!in.dnsChecked) {
+        Push(d, LineId::Dns, L"DNS", L"未检测", Sev::Skip, L"这一轮没有执行");
+    } else if (in.dnsResolverIp.empty()) {
+        Push(d, LineId::Dns, L"DNS", L"查询失败", Sev::Skip,
+             in.dnsError.empty() ? std::wstring(L"解析器地址查询失败") : in.dnsError);
     } else if (!v4.ok) {
         Push(d, LineId::Dns, L"DNS", in.dnsResolverIp, Sev::Skip);
     } else if (in.dnsResolverIp == v4.ip) {
