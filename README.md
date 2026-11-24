@@ -25,7 +25,7 @@
 
 |路径|说明|
 |-|-|
-|**`ip-float.exe`**|★ 成品（当前 **v3.3.0**，约 1 MB）。单文件、双击即开、零运行时依赖。**不进 git**，分发走 [Releases](https://github.com/jiqinghuang/ip-float/releases/latest)|
+|**`ip-float.exe`**|★ 成品（当前 **v3.3.1**，约 1 MB）。单文件、双击即开、零运行时依赖。**不进 git**，分发走 [Releases](https://github.com/jiqinghuang/ip-float/releases/latest)|
 |`src/`|C++ 源码（按职责拆分）+ 图标 + `build.ps1` / `sign.ps1`|
 |`tests/`|纯逻辑单测（`build.ps1 -Test`）|
 |`.site-assets/`|网站素材生成 / 站点页面校验|
@@ -163,7 +163,7 @@ pwsh -File src\build.ps1 -Sign            # 编译 + 签名
   `src/app.manifest` 的 `assemblyIdentity` 里还有两份字面版本号。`build.ps1` 编译前会检查三处一致。
   exe 带 manifest（PerMonitorV2、asInvoker、longPathAware）。
 * 构建开了 `-Wall -Wextra`，**应当零警告**；发布/CI 建议加 `-Werror`。
-* 发版：改好三处版本号后打 tag 并 push（例如 `git tag v3.3.0 && git push origin v3.3.0`），
+* 发版：改好三处版本号后打 tag 并 push（例如 `git tag v3.3.1 && git push origin v3.3.1`），
   GitHub Actions 会构建、跑两套单测并把 exe 上传到对应的 Release。
 
 ## 「打开文件 - 安全警告」/「Windows 已保护你的电脑」弹窗
