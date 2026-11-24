@@ -30,6 +30,7 @@ const wchar_t* kUrlV6[] = {
 const wchar_t* kUrlGeo = L"https://ipwho.is/";
 
 std::wstring Trim(const std::wstring& s);
+long long JsonInt(const std::string& json, const std::string& key, bool& found);
 
 // 用 Akamai 的 whoami 反查「我这台机器的 DNS 解析器出口 IP」：
 // whoami.akamai.net 的 A 记录是按查询来源应答的，返回的就是递归解析器的地址。
@@ -102,6 +103,39 @@ bool IsIpv6Text(const std::wstring& s)
 // key 描述「v6 出口这件事有没有可能变」：出口 IP + 隧道是否接管 v6 + 本机是否有公网 v6。
 // 只要这三样没变，上一轮的结论就仍然成立 —— 而失败一次要 4~8 秒（WinHTTP 的超时
 // 在 TUN 这条路上根本不生效，设 1.2s 实测能跑 7.5s），所以绝不每轮都去撞。
+// v6 出口的归属：只有拿到地址时才查，按地址缓存 —— 一次要 1~3 秒，不能每轮重来。
+void FillV6Geo(const std::wstring& ip, ExitProbe& out)
+{
+    static std::wstring cachedIp, cachedAsn, cachedCountry, cachedOrg;
+    if (!cachedIp.empty() && cachedIp == ip) {
+        out.asn = cachedAsn;
+        out.country = cachedCountry;
+        out.org = cachedOrg;
+        return;
+    }
+
+    std::string body;
+    std::wstring err;
+    if (!HttpGet(L"https://ipwho.is/" + ip, body, err, 3000)) return;
+
+    bool found = false;
+    const long long n = JsonInt(body, "asn", found);
+    std::wstring asn = (found && n > 0) ? (L"AS" + std::to_wstring(n)) : std::wstring();
+    std::wstring cc = Utf8ToWide(JsonStr(body, "country_code"));
+    if (cc.empty()) cc = Utf8ToWide(JsonStr(body, "country"));
+    std::wstring org = Utf8ToWide(JsonStr(body, "org"));
+    if (org.empty()) org = Utf8ToWide(JsonStr(body, "isp"));
+    if (asn.empty() && cc.empty()) return;      // 什么都查不到，别写缓存
+
+    out.asn = asn;
+    out.country = cc;
+    out.org = org;
+    cachedIp = ip;
+    cachedAsn = asn;
+    cachedCountry = cc;
+    cachedOrg = org;
+}
+
 bool ProbeV6Exit(ExitProbe& out, int budgetMs, const std::wstring& key)
 {
     static std::wstring cachedKey;
@@ -137,6 +171,7 @@ bool ProbeV6Exit(ExitProbe& out, int budgetMs, const std::wstring& key)
             if (IsIpv6Text(ip)) {
                 out.ok = true;
                 out.ip = ip;
+                FillV6Geo(ip, out);          // 归属决定「是否与 v4 同源」，必须有
                 cachedKey = key;
                 cached = out;
                 haveCache = true;

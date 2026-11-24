@@ -193,9 +193,17 @@ Diagnosis Diagnose(const ProbeInput& in)
 
     // ── IPv6 出口 ────────────────────────────────────────────────────
     if (!v6.ok) {
-        std::wstring note = f.hasPublicV6
-            ? L"本机有公网 IPv6，但 v6 目的地不可达（被墙或运营商 v6 路由异常）"
-            : L"v6 目标打不通；本机无公网 v6 时属正常";
+        // 归因要分情况：隧道接管了 v6 却连不上 v6 目标，最常见的不是「被墙」，
+        // 而是隧道出口（服务器）根本没有 IPv6。
+        std::wstring note;
+        if (f.hasPublicV6 && f.tunDefaultV6) {
+            note = L"隧道已接管 v6，但到不了 v6 目标 —— 通常是隧道出口没有 IPv6；"
+                   L"纯 v6 站点不可用（不影响 v4，也不构成泄漏）";
+        } else if (f.hasPublicV6) {
+            note = L"本机有公网 IPv6，但 v6 目的地不可达（被墙或运营商 v6 路由异常）";
+        } else {
+            note = L"v6 目标打不通；本机无公网 v6 时属正常";
+        }
         Push(d, LineId::ExitV6, L"IPv6 出口", L"不可达", Sev::Skip, note);
     } else if (v6.ip.empty()) {
         // 连通性有了，但远端回显拿不到地址。不要把「可走通」冒充成出口地址，
@@ -206,11 +214,23 @@ Diagnosis Diagnose(const ProbeInput& in)
             Push(d, LineId::V6Local, L"本机 IPv6", f.publicV6, Sev::Skip,
                  L"本机公网 IPv6，不是远端出口；只有 IPv6 路由未接管时才会直接暴露");
         }
-    } else if (v4.ok && !v6.ip.empty() && v6.ip != v4.ip) {
-        Push(d, LineId::ExitV6, L"IPv6 出口", v6.ip, Sev::Bad,
-             L"与 IPv4 出口 " + v4.ip + L" 不同源");
+    } else if (v4.ok && v6.ip == v4.ip) {
+        // v6 请求被 v4 出口承载（回显拿到了 v4 地址）—— 这是正常的，不是矛盾
+        Push(d, LineId::ExitV6, L"IPv6 出口", L"由 v4 出口承载", Sev::Ok,
+             L"回显地址与 IPv4 相同：" + v6.ip);
+    } else if (v4.ok && !v6.asn.empty() && !v4.asn.empty()) {
+        // 比归属，不比地址字符串：v4 与 v6 是不同协议族，地址本来就不会相等
+        if (_wcsicmp(v6.asn.c_str(), v4.asn.c_str()) == 0) {
+            Push(d, LineId::ExitV6, L"IPv6 出口", L"与 IPv4 同源", Sev::Ok,
+                 v6.ip + L"（同为 " + v6.asn + L"）");
+        } else {
+            Push(d, LineId::ExitV6, L"IPv6 出口", L"与 IPv4 不同源", Sev::Warn,
+                 L"v4 " + v4.asn + L" / v6 " + v6.asn + L"（" + v6.ip + L"）");
+        }
     } else if (v4.ok) {
-        Push(d, LineId::ExitV6, L"IPv6 出口", L"与 IPv4 同源", Sev::Ok, v6.ip);
+        // 拿不到 v6 出口的归属：只报地址，不判同源，也不报警
+        Push(d, LineId::ExitV6, L"IPv6 出口", v6.ip, Sev::Skip,
+             L"拿不到该地址的归属，无法核对是否与 v4 同源");
     } else {
         Push(d, LineId::ExitV6, L"IPv6 出口", v6.ip, Sev::Skip);
     }

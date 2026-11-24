@@ -71,7 +71,8 @@ ProbeInput Base()
     in.v4.utcOffsetMinutes = 480;    // 与本机一致，先测「全绿」
 
     in.v6.ok = true;
-    in.v6.ip = L"45.77.144.7";       // 与 v4 同源
+    in.v6.ip = L"2001:db8::42";      // 真正的 v6 地址（文档前缀）
+    in.v6.asn = L"AS20473";          // 与 v4 同 ASN = 同源
     return in;
 }
 
@@ -149,10 +150,37 @@ void TestExitMismatch()
     printf("\n-- exit mismatch --\n");
     ProbeInput in = Base();
     in.v6.ip = L"2408:84e2:480:77c9::1";
+    in.v6.asn = L"AS4134";       // 和 v4 的 AS20473 不同
     Diagnosis d = Diagnose(in);
-    CheckSev(d.Find(LineId::ExitV6)->sev, Sev::Bad, "mismatch: exit v6 bad");
-    CheckSev(d.verdict, Sev::Bad, "mismatch: verdict bad");
-    Check(d.evidence.find(L"2408") != std::wstring::npos, "mismatch: evidence names v6");
+    CheckSev(d.Find(LineId::ExitV6)->sev, Sev::Warn, "mismatch: exit v6 warns");
+    CheckSev(d.verdict, Sev::Warn, "mismatch: verdict warn");
+    Check(d.Find(LineId::ExitV6)->note.find(L"AS4134") != std::wstring::npos,
+          "mismatch: note names the v6 asn");
+}
+
+// 正常双栈：地址不同但 ASN 相同 —— 不能报警
+void TestExitSameAsn()
+{
+    puts("== same asn, different address ==");
+    ProbeInput in = Base();
+    in.v6.ip = L"2600:1f18::1";
+    in.v6.asn = L"AS20473";
+    Diagnosis d = Diagnose(in);
+    CheckSev(d.Find(LineId::ExitV6)->sev, Sev::Ok, "same-asn: ok despite different address");
+    Check(d.Find(LineId::ExitV6)->value.find(L"同源") != std::wstring::npos,
+          "same-asn: value says tongyuan");
+}
+
+// 拿不到 v6 归属：只报地址，不判也不警
+void TestExitNoAsn()
+{
+    puts("== v6 without asn ==");
+    ProbeInput in = Base();
+    in.v6.ip = L"2600:1f18::1";
+    in.v6.asn.clear();
+    Diagnosis d = Diagnose(in);
+    CheckSev(d.Find(LineId::ExitV6)->sev, Sev::Skip, "no-asn: skip, not warn");
+    CheckSev(d.verdict, Sev::Ok, "no-asn: verdict stays ok");
 }
 
 void TestTimezone()
@@ -279,6 +307,8 @@ int main()
     TestNoPublicV6();
     TestV6LocalFallback();
     TestExitMismatch();
+    TestExitSameAsn();
+    TestExitNoAsn();
     TestTimezone();
     TestProxyOverlay();
     TestExpectation();

@@ -48,7 +48,11 @@ ProbeInput DemoProbeInput(const IpInfo& info)
     in.v4.utcOffsetMinutes = 540;
 
     in.v6.ok = true;
-    in.v6.ip = info.ip;
+    // 真实的双栈出口：v6 回显的是一个 v6 地址（RFC 3849 文档前缀），
+    // 归属与 v4 同一个 ASN —— 所以「同源」，而不是把 v4 地址冒充成 v6。
+    in.v6.ip = L"2001:db8:4c0a:1::42";
+    in.v6.asn = info.asn;
+    in.v6.country = info.country;
 
     in.dnsChecked = true;
     in.dnsResolverIp = L"1.1.1.1";
