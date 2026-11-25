@@ -3,12 +3,15 @@
 #include <windows.h>
 #include <shellapi.h>
 
+#include <string>
+
 struct Tray {
     NOTIFYICONDATAW nid = {};
     bool added = false;
 };
 
 void TrayInit(Tray& tray, HWND hwnd, HICON icon, UINT callbackMsg, const wchar_t* tip);
+void TraySetTip(Tray& tray, const std::wstring& tip);
 bool TrayAdd(Tray& tray);
 void TrayRemove(Tray& tray);
 

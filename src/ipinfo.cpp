@@ -5,120 +5,6 @@
 #include <cwchar>
 #include <cwctype>
 
-// ── JSON 字符串读取（够用就好，不追求通用 JSON 解析器）─────────────────────
-
-// 读 \uXXXX（i 指向反斜杠）→ 码点；不是合法四位十六进制就返回 false
-static bool JsonHex4(const std::string& json, size_t i, unsigned& out)
-{
-    out = 0;
-    if (i + 5 >= json.size()) return false;
-    for (int k = 2; k < 6; ++k) {
-        char h = json[i + (size_t)k];
-        unsigned d;
-        if (h >= '0' && h <= '9')      d = (unsigned)(h - '0');
-        else if (h >= 'a' && h <= 'f') d = (unsigned)(h - 'a' + 10);
-        else if (h >= 'A' && h <= 'F') d = (unsigned)(h - 'A' + 10);
-        else return false;
-        out = out * 16 + d;
-    }
-    return true;
-}
-
-// 码点 → UTF-8；正确处理 BMP 之外的四字节序列
-static void AppendUtf8(std::string& out, unsigned cp)
-{
-    if (cp < 0x80) {
-        out += (char)cp;
-    } else if (cp < 0x800) {
-        out += (char)(0xC0 | (cp >> 6));
-        out += (char)(0x80 | (cp & 0x3F));
-    } else if (cp < 0x10000) {
-        out += (char)(0xE0 | (cp >> 12));
-        out += (char)(0x80 | ((cp >> 6) & 0x3F));
-        out += (char)(0x80 | (cp & 0x3F));
-    } else {
-        out += (char)(0xF0 | (cp >> 18));
-        out += (char)(0x80 | ((cp >> 12) & 0x3F));
-        out += (char)(0x80 | ((cp >> 6) & 0x3F));
-        out += (char)(0x80 | (cp & 0x3F));
-    }
-}
-
-std::string JsonStr(const std::string& json, const std::string& key)
-{
-    std::string pat = "\"" + key + "\"";
-    size_t pos = json.find(pat);
-    while (pos != std::string::npos) {
-        size_t i = pos + pat.size();
-        while (i < json.size() && (json[i] == ' ' || json[i] == '\t')) ++i;
-        if (i < json.size() && json[i] == ':') {
-            ++i;
-            while (i < json.size() && (json[i] == ' ' || json[i] == '\t')) ++i;
-            if (i < json.size() && json[i] == '"') {
-                ++i;
-                std::string out;
-                while (i < json.size() && json[i] != '"') {
-                    if (json[i] == '\\' && i + 1 < json.size()) {
-                        char c = json[i + 1];
-                        // 注意：简单转义要把 i 推进到转义字符本身，
-                        // 循环末尾的统一 ++i 再推到下一个字符；否则会把 "n" 原样留下
-                        if (c == 'n') { out += '\n'; ++i; }
-                        else if (c == 't') { out += '\t'; ++i; }
-                        else if (c == 'r') { out += '\r'; ++i; }
-                        else if (c == 'b') { out += '\b'; ++i; }
-                        else if (c == 'f') { out += '\f'; ++i; }
-                        else if (c == 'u') {
-                            if (i + 5 >= json.size()) {
-                                // 截断的 \u，原样保留
-                                out += '\\';
-                                out += 'u';
-                                ++i;
-                            } else {
-                                unsigned code = 0;
-                                if (!JsonHex4(json, i, code)) {
-                                    // 非法 \uXXXX：保留 "\u"，后面的字符按普通文本继续走，
-                                    // 这样截断的 "\u12" 也不会把引号/花括号吞进结果
-                                    out += '\\';
-                                    out += 'u';
-                                    ++i;
-                                } else {
-                                    i += 5;                   // i 停在最后一个十六进制位
-                                    // 高代理 + 低代理 → 合成 BMP 之外的码点
-                                    if (code >= 0xD800u && code <= 0xDBFFu &&
-                                        i + 6 < json.size() &&
-                                        json[i + 1] == '\\' && json[i + 2] == 'u') {
-                                        unsigned lo = 0;
-                                        if (JsonHex4(json, i + 1, lo) &&
-                                            lo >= 0xDC00u && lo <= 0xDFFFu) {
-                                            code = 0x10000u + ((code - 0xD800u) << 10)
-                                                 + (lo - 0xDC00u);
-                                            i += 6;
-                                        }
-                                    }
-                                    // 落单的代理项还原不了，按 Unicode 惯例写 U+FFFD
-                                    if (code >= 0xD800u && code <= 0xDFFFu) code = 0xFFFDu;
-                                    AppendUtf8(out, code);
-                                }
-                            }
-                        } else {
-                            out += c;
-                            ++i;
-                        }
-                        ++i;
-                    } else {
-                        out += json[i];
-                        ++i;
-                    }
-                }
-                return out;
-            }
-            return "";
-        }
-        pos = json.find(pat, pos + 1);
-    }
-    return "";
-}
-
 // ── 解析 ────────────────────────────────────────────────────────────────────
 
 bool ParseIpInfo(const std::string& json, const std::wstring& source, IpInfo& out,
@@ -126,19 +12,37 @@ bool ParseIpInfo(const std::string& json, const std::wstring& source, IpInfo& ou
 {
     out = IpInfo();
     out.ip = Utf8ToWide(JsonStr(json, "ip"));
-    if (out.ip.empty()) {
-        err = L"响应里没有 ip 字段";
-        return false;
-    }
 
+    // 常见源（ipinfo / ipapi / ipwho.is）的字段名不完全一样，这里按优先级取。
+    // 空值/非对象（比如 ipinfo 的 timezone 是字符串）都会自然落到下一档。
     std::string country = JsonStr(json, "country_code");
     if (country.empty()) country = JsonStr(json, "country");
     out.country = Utf8ToWide(country);
     out.region  = Utf8ToWide(JsonStr(json, "region"));
     out.city    = Utf8ToWide(JsonStr(json, "city"));
+
     out.utcOffsetMinutes = ParseUtcOffset(JsonStr(json, "utc_offset"));
-    std::wstring org = Utf8ToWide(JsonStr(json, "org"));
-    out.asn = Utf8ToWide(JsonStr(json, "asn"));
+    if (out.utcOffsetMinutes == kNoOffset) {
+        bool found = false;
+        const long long seconds = JsonInt(json, "timezone.offset", found);
+        if (found) out.utcOffsetMinutes = (int)(seconds / 60);
+    }
+    if (out.utcOffsetMinutes == kNoOffset)
+        out.utcOffsetMinutes = ParseUtcOffset(JsonStr(json, "timezone.utc"));
+
+    std::string asnText = JsonStr(json, "connection.asn");
+    if (asnText.empty()) asnText = JsonStr(json, "asn");
+    if (asnText.empty()) {
+        bool found = false;
+        long long n = JsonInt(json, "connection.asn", found);
+        if (!found) n = JsonInt(json, "asn", found);
+        if (found && n > 0) asnText = std::to_string(n);
+    }
+    out.asn = Utf8ToWide(asnText);
+
+    std::wstring org = Utf8ToWide(JsonStr(json, "connection.org"));
+    if (org.empty()) org = Utf8ToWide(JsonStr(json, "org"));
+    if (org.empty()) org = Utf8ToWide(JsonStr(json, "isp"));
 
     // ipinfo.io 把 ASN 塞在 org 里："AS20473 The Constant Company, LLC"
     if (org.size() > 3 && (org[0] == L'A' || org[0] == L'a') &&
@@ -149,7 +53,7 @@ bool ParseIpInfo(const std::string& json, const std::wstring& source, IpInfo& ou
         for (size_t i = 2; i < head.size() && digits; ++i)
             if (head[i] < L'0' || head[i] > L'9') digits = false;
         if (digits) {
-            out.asn = head;
+            if (out.asn.empty()) out.asn = head;
             out.org = (sp == std::wstring::npos) ? L"" : org.substr(sp + 1);
             while (!out.org.empty() && out.org[0] == L' ') out.org.erase(0, 1);
         } else {
@@ -157,6 +61,20 @@ bool ParseIpInfo(const std::string& json, const std::wstring& source, IpInfo& ou
         }
     } else {
         out.org = org;
+    }
+
+    // 有些源会带首尾空白；地址族判定同时兼做合法性校验
+    size_t a = 0, b = out.ip.size();
+    while (a < b && iswspace(out.ip[a])) ++a;
+    while (b > a && iswspace(out.ip[b - 1])) --b;
+    out.ip = out.ip.substr(a, b - a);
+    if (out.ip.empty()) {
+        err = L"响应里没有 ip 字段";
+        return false;
+    }
+    if (ClassifyIp(out.ip) == IpKind::None) {
+        err = L"响应里的 ip 不是合法地址";
+        return false;
     }
 
     // 统一成 "AS" + 大写数字；ipapi 有时只给 "20473"
@@ -250,13 +168,23 @@ std::wstring ShortAsn(const IpInfo& info){
 // "+0800" / "-0500" → 分钟；格式不对返回 kNoOffset
 int ParseUtcOffset(const std::string& s)
 {
-    if (s.size() != 5) return kNoOffset;
+    // 接受 "+0800"、"-0500"，也接受 ipwho.is 的 "+08:00"/"-05:00"
+    if (s.size() != 5 && s.size() != 6) return kNoOffset;
     if (s[0] != '+' && s[0] != '-') return kNoOffset;
-    for (int i = 1; i < 5; ++i)
-        if (s[i] < '0' || s[i] > '9') return kNoOffset;
-    int hh = (s[1] - '0') * 10 + (s[2] - '0');
-    int mm = (s[3] - '0') * 10 + (s[4] - '0');
+    const size_t colon = (s.size() == 6 && s[3] == ':') ? 3 : 0;
+    if (s.size() == 6 && colon == 0) return kNoOffset;
+    if (colon) {
+        if (s[1] < '0' || s[1] > '9' || s[2] < '0' || s[2] > '9' ||
+            s[4] < '0' || s[4] > '9' || s[5] < '0' || s[5] > '9')
+            return kNoOffset;
+    } else {
+        for (int i = 1; i < 5; ++i)
+            if (s[i] < '0' || s[i] > '9') return kNoOffset;
+    }
+    const int hh = (s[1] - '0') * 10 + (s[2] - '0');
+    const int mm = colon ? ((s[4] - '0') * 10 + (s[5] - '0'))
+                         : ((s[3] - '0') * 10 + (s[4] - '0'));
     if (hh > 14 || mm > 59) return kNoOffset;
-    int v = hh * 60 + mm;
+    const int v = hh * 60 + mm;
     return s[0] == '-' ? -v : v;
 }

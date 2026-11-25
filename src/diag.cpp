@@ -7,6 +7,7 @@
 #include <windows.h>
 #include <windns.h>
 
+#include <cwchar>
 #include <string>
 #include <vector>
 
@@ -29,8 +30,25 @@ const wchar_t* kUrlV6[] = {
 // 归属 / ASN / 时区偏移：ipwho.is 免费、无 key、HTTPS
 const wchar_t* kUrlGeo = L"https://ipwho.is/";
 
+// 探测缓存的显式容器。以前散在各函数里的 static 变量不可重置、不可测，
+// 也不方便给「立即刷新」加 force；现在集中在这里。
+struct ProbeCache {
+    std::wstring v6Key;
+    ExitProbe    v6Result;
+    bool         v6Have = false;
+    ULONGLONG    v6At   = 0;
+
+    std::wstring geoIp, geoAsn, geoCountry, geoOrg, geoRegion, geoCity;
+    int          geoOffset = kNoOffset;
+    std::wstring dnsIp, dnsCountry, dnsOrg;
+    std::wstring offsetIp;
+    int          offsetValue = kNoOffset;
+};
+
+// 卡片自动刷新共用一份；--diag 用局部实例，互不污染。
+ProbeCache g_cache;
+
 std::wstring Trim(const std::wstring& s);
-long long JsonInt(const std::string& json, const std::string& key, bool& found);
 
 // 用 Akamai 的 whoami 反查「我这台机器的 DNS 解析器出口 IP」：
 // whoami.akamai.net 的 A 记录是按查询来源应答的，返回的就是递归解析器的地址。
@@ -98,19 +116,36 @@ bool IsIpv6Text(const std::wstring& s)
     return InetPtonW(AF_INET6, s.c_str(), &addr) == 1;
 }
 
+// 公网 IP 回显：默认严格校验证书；只有在证书类错误时才降级重试一次。
+// 降级结果会在诊断里标明「证书未验证」，避免把 MITM 的地址当成真实出口。
+bool HttpGetIpEcho(const std::wstring& url, std::string& body, std::wstring& err,
+                   int timeoutMs, bool& tlsLenient)
+{
+    tlsLenient = false;
+    if (HttpGet(url, body, err, timeoutMs, /*direct=*/true, /*lenientTls=*/false))
+        return true;
+    if (!IsTlsCertErrorText(err)) return false;
+    if (!HttpGet(url, body, err, timeoutMs, /*direct=*/true, /*lenientTls=*/true))
+        return false;
+    tlsLenient = true;
+    return true;
+}
+
 // 优先取真实 IPv6 出口地址；取不到时退回原来的 TCP 连通测试。
 // 这两者要区分：有地址才能回答「v6 与 v4 是否同源」，只有连通性只能说「可走通」。
 // key 描述「v6 出口这件事有没有可能变」：出口 IP + 隧道是否接管 v6 + 本机是否有公网 v6。
 // 只要这三样没变，上一轮的结论就仍然成立 —— 而失败一次要 4~8 秒（WinHTTP 的超时
 // 在 TUN 这条路上根本不生效，设 1.2s 实测能跑 7.5s），所以绝不每轮都去撞。
 // v6 出口的归属：只有拿到地址时才查，按地址缓存 —— 一次要 1~3 秒，不能每轮重来。
-void FillV6Geo(const std::wstring& ip, ExitProbe& out)
+void FillIpGeo(const std::wstring& ip, ExitProbe& out, ProbeCache& c)
 {
-    static std::wstring cachedIp, cachedAsn, cachedCountry, cachedOrg;
-    if (!cachedIp.empty() && cachedIp == ip) {
-        out.asn = cachedAsn;
-        out.country = cachedCountry;
-        out.org = cachedOrg;
+    if (!c.geoIp.empty() && c.geoIp == ip) {
+        out.asn = c.geoAsn;
+        out.country = c.geoCountry;
+        out.org = c.geoOrg;
+        out.region = c.geoRegion;
+        out.city = c.geoCity;
+        if (out.utcOffsetMinutes == kNoOffset) out.utcOffsetMinutes = c.geoOffset;
         return;
     }
 
@@ -119,37 +154,51 @@ void FillV6Geo(const std::wstring& ip, ExitProbe& out)
     if (!HttpGet(L"https://ipwho.is/" + ip, body, err, 3000)) return;
 
     bool found = false;
-    const long long n = JsonInt(body, "asn", found);
+    long long n = JsonInt(body, "connection.asn", found);
+    if (!found) n = JsonInt(body, "asn", found);
     std::wstring asn = (found && n > 0) ? (L"AS" + std::to_wstring(n)) : std::wstring();
     std::wstring cc = Utf8ToWide(JsonStr(body, "country_code"));
     if (cc.empty()) cc = Utf8ToWide(JsonStr(body, "country"));
-    std::wstring org = Utf8ToWide(JsonStr(body, "org"));
+    std::wstring org = Utf8ToWide(JsonStr(body, "connection.org"));
+    if (org.empty()) org = Utf8ToWide(JsonStr(body, "org"));
     if (org.empty()) org = Utf8ToWide(JsonStr(body, "isp"));
     if (asn.empty() && cc.empty()) return;      // 什么都查不到，别写缓存
 
     out.asn = asn;
     out.country = cc;
     out.org = org;
-    cachedIp = ip;
-    cachedAsn = asn;
-    cachedCountry = cc;
-    cachedOrg = org;
+    out.region = Utf8ToWide(JsonStr(body, "region"));
+    out.city = Utf8ToWide(JsonStr(body, "city"));
+    if (out.utcOffsetMinutes == kNoOffset) {
+        long long off = JsonInt(body, "timezone.offset", found);
+        if (!found) off = JsonInt(body, "offset", found);
+        if (found) out.utcOffsetMinutes = (int)(off / 60);
+    }
+    c.geoIp = ip;
+    c.geoAsn = asn;
+    c.geoCountry = cc;
+    c.geoOrg = org;
+    c.geoRegion = out.region;
+    c.geoCity = out.city;
+    c.geoOffset = out.utcOffsetMinutes;
 }
 
-bool ProbeV6Exit(ExitProbe& out, int budgetMs, const std::wstring& key)
+bool ProbeV6Exit(ExitProbe& out, int budgetMs, const std::wstring& key, bool force,
+                 ProbeCache& c)
 {
-    static std::wstring cachedKey;
-    static ExitProbe    cached;
-    static bool         haveCache = false;
-
-    if (haveCache && key == cachedKey) {
-        out = cached;
+    // 失败也缓存，但只信 2 分钟：瞬时失败不能靠「点刷新」才恢复。
+    // 成功（含地址/归属）10 分钟内复用；用户显式刷新时 force 绕过。
+    const ULONGLONG now = GetTickCount64();
+    const ULONGLONG ttl = c.v6Result.ok ? 10ULL * 60 * 1000 : 2ULL * 60 * 1000;
+    if (!force && c.v6Have && key == c.v6Key && now - c.v6At < ttl) {
+        out = c.v6Result;
         return out.ok;
     }
 
     out.ok = false;
     out.ip.clear();
     out.err.clear();
+    out.tlsLenient = false;
     if (budgetMs <= 0) budgetMs = 2000;
 
     // 用「总预算」而不是「每个 URL 各自超时」：以前两个回显各给 2.5 秒，
@@ -166,15 +215,18 @@ bool ProbeV6Exit(ExitProbe& out, int budgetMs, const std::wstring& key)
 
         std::string body;
         std::wstring err;
-        if (HttpGet(url, body, err, left, /*direct=*/true, /*lenientTls=*/true)) {
+        bool lenient = false;
+        if (HttpGetIpEcho(url, body, err, left, lenient)) {
             const std::wstring ip = Trim(Utf8ToWide(body));
             if (IsIpv6Text(ip)) {
                 out.ok = true;
+                out.tlsLenient = lenient;
                 out.ip = ip;
-                FillV6Geo(ip, out);          // 归属决定「是否与 v4 同源」，必须有
-                cachedKey = key;
-                cached = out;
-                haveCache = true;
+                FillIpGeo(ip, out, c);       // 归属决定「是否与 v4 同源」，必须有
+                c.v6Key = key;
+                c.v6Result = out;
+                c.v6At = GetTickCount64();
+                c.v6Have = true;
                 return true;
             }
             out.err = L"响应不是 IPv6 地址";
@@ -197,10 +249,37 @@ bool ProbeV6Exit(ExitProbe& out, int budgetMs, const std::wstring& key)
     }
     if (out.err.empty()) out.err = L"TCP 连接失败";
 
-    cachedKey = key;
-    cached = out;
-    haveCache = true;
+    c.v6Key = key;
+    c.v6Result = out;
+    c.v6At = GetTickCount64();
+    c.v6Have = true;
     return false;
+}
+
+// 主数据源返回 IPv6 时，v4 出口要单独补一次。只用于诊断，不影响卡片首屏。
+bool ProbeV4Exit(ExitProbe& out, int budgetMs, ProbeCache& c)
+{
+    out = ExitProbe();
+    if (budgetMs <= 0) budgetMs = 2500;
+
+    std::string body;
+    std::wstring err;
+    bool lenient = false;
+    if (!HttpGetIpEcho(kUrlV4, body, err, budgetMs, lenient)) {
+        out.err = err;
+        return false;
+    }
+    const std::wstring ip = Trim(Utf8ToWide(body));
+    if (ClassifyIp(ip) != IpKind::V4) {
+        out.err = ip.empty() ? L"响应为空" : L"响应不是 IPv4 地址";
+        return false;
+    }
+
+    out.ok = true;
+    out.ip = ip;
+    out.tlsLenient = lenient;
+    FillIpGeo(ip, out, c);
+    return true;
 }
 
 // DNS 解析器出口：一次本地 DNS 查询；解析器不在出口时再查一次它的归属。
@@ -216,7 +295,7 @@ std::wstring DnsErrorText(long code)
     }
 }
 
-void ProbeDns(ProbeInput& out)
+void ProbeDns(ProbeInput& out, ProbeCache& c)
 {
     // 这一项失败就整行变灰，代价太高。而且失败常发生在"刚切网络"的瞬间：
     // 那时解析器会返回空应答（9501），立刻重试会撞上同一个坏状态，所以要间隔一下。
@@ -238,10 +317,9 @@ void ProbeDns(ProbeInput& out)
     if (rip == out.v4.ip) return;
 
     // 解析器地址很少变，查一次就够了：每次重查要多花 2~4 秒，失败时更久。
-    static std::wstring cachedIp, cachedCountry, cachedOrg;
-    if (!cachedIp.empty() && cachedIp == rip) {
-        out.dnsResolverCountry = cachedCountry;
-        out.dnsResolverOrg = cachedOrg;
+    if (!c.dnsIp.empty() && c.dnsIp == rip) {
+        out.dnsResolverCountry = c.dnsCountry;
+        out.dnsResolverOrg = c.dnsOrg;
         return;
     }
 
@@ -251,14 +329,14 @@ void ProbeDns(ProbeInput& out)
     out.dnsResolverCountry = Utf8ToWide(JsonStr(body, "country_code"));
     if (out.dnsResolverCountry.empty())
         out.dnsResolverCountry = Utf8ToWide(JsonStr(body, "country"));
-    out.dnsResolverOrg = Utf8ToWide(JsonStr(body, "org"));
-    if (out.dnsResolverOrg.empty())
-        out.dnsResolverOrg = Utf8ToWide(JsonStr(body, "isp"));
+    out.dnsResolverOrg = Utf8ToWide(JsonStr(body, "connection.org"));
+    if (out.dnsResolverOrg.empty()) out.dnsResolverOrg = Utf8ToWide(JsonStr(body, "org"));
+    if (out.dnsResolverOrg.empty()) out.dnsResolverOrg = Utf8ToWide(JsonStr(body, "isp"));
 
     if (!out.dnsResolverCountry.empty()) {
-        cachedIp = rip;
-        cachedCountry = out.dnsResolverCountry;
-        cachedOrg = out.dnsResolverOrg;
+        c.dnsIp = rip;
+        c.dnsCountry = out.dnsResolverCountry;
+        c.dnsOrg = out.dnsResolverOrg;
     }
 }
 
@@ -268,34 +346,6 @@ std::wstring Trim(const std::wstring& s)
     while (a < b && (s[a] == L' ' || s[a] == L'\t' || s[a] == L'\r' || s[a] == L'\n')) ++a;
     while (b > a && (s[b - 1] == L' ' || s[b - 1] == L'\t' || s[b - 1] == L'\r' || s[b - 1] == L'\n')) --b;
     return s.substr(a, b - a);
-}
-
-// JsonStr 只认带引号的字符串；数字字段（"asn": 17621、"offset": 28800）用这个
-long long JsonInt(const std::string& json, const std::string& key, bool& found)
-{
-    found = false;
-    const std::string pat = "\"" + key + "\"";
-    size_t pos = json.find(pat);
-    if (pos == std::string::npos) return 0;
-    size_t i = pos + pat.size();
-    auto skipWs = [&] {
-        while (i < json.size() &&
-               (json[i] == ' ' || json[i] == '\t' || json[i] == '\n' || json[i] == '\r')) ++i;
-    };
-    skipWs();
-    if (i >= json.size() || json[i] != ':') return 0;
-    ++i;
-    skipWs();
-    bool neg = false;
-    if (i < json.size() && json[i] == '-') { neg = true; ++i; }
-    if (i >= json.size() || json[i] < '0' || json[i] > '9') return 0;
-    long long v = 0;
-    while (i < json.size() && json[i] >= '0' && json[i] <= '9') {
-        v = v * 10 + (json[i] - '0');
-        ++i;
-    }
-    found = true;
-    return neg ? -v : v;
 }
 
 // ipwho.is：geo + connection(asn/org) + timezone.offset（秒）
@@ -308,15 +358,18 @@ bool FillGeo(const std::string& json, ExitProbe& e)
     e.region = Utf8ToWide(JsonStr(json, "region"));
     e.city   = Utf8ToWide(JsonStr(json, "city"));
 
-    std::wstring org = Utf8ToWide(JsonStr(json, "org"));
+    std::wstring org = Utf8ToWide(JsonStr(json, "connection.org"));
+    if (org.empty()) org = Utf8ToWide(JsonStr(json, "org"));
     if (org.empty()) org = Utf8ToWide(JsonStr(json, "isp"));
     e.org = org;
 
     bool found = false;
-    long long asn = JsonInt(json, "asn", found);
+    long long asn = JsonInt(json, "connection.asn", found);
+    if (!found) asn = JsonInt(json, "asn", found);
     if (found && asn > 0) e.asn = L"AS" + std::to_wstring(asn);
 
-    long long off = JsonInt(json, "offset", found);
+    long long off = JsonInt(json, "timezone.offset", found);
+    if (!found) off = JsonInt(json, "offset", found);
     if (found) e.utcOffsetMinutes = (int)(off / 60);
 
     return !e.country.empty();
@@ -380,68 +433,133 @@ std::wstring Pad(const std::wstring& s, size_t n)
     return o;
 }
 
+void ReplaceAll(std::wstring& s, const std::wstring& from, const wchar_t* to)
+{
+    if (from.empty()) return;
+    const size_t toLen = wcslen(to);
+    size_t p = 0;
+    while ((p = s.find(from, p)) != std::wstring::npos) {
+        s.replace(p, from.size(), to);
+        p += toLen;
+    }
+}
+
+// 只替换已知的、可能出现在报告里的敏感值；不改变任何判定结果。
+void RedactText(std::wstring& s, const ProbeInput& in, const NetFacts& f)
+{
+    // 长地址先换：publicV6 可能以 v6 出口地址为前缀
+    ReplaceAll(s, f.publicV6, L"<LOCAL_V6>");
+    ReplaceAll(s, in.v6.ip, L"<IPv6>");
+    ReplaceAll(s, in.v4.ip, L"<IPv4>");
+    ReplaceAll(s, in.dnsResolverIp, L"<DNS>");
+    ReplaceAll(s, f.lanIp, L"<LAN>");
+    ReplaceAll(s, f.proxyServer, L"<PROXY>");
+    ReplaceAll(s, f.tunIfName, L"<ADAPTER>");
+    ReplaceAll(s, f.tunAdapter, L"<ADAPTER>");
+    ReplaceAll(s, f.lanAdapter, L"<ADAPTER>");
+}
+
+void RedactDiagnosis(Diagnosis& d, const ProbeInput& in, const NetFacts& f)
+{
+    RedactText(d.summary, in, f);
+    RedactText(d.evidence, in, f);
+    for (auto& line : d.lines) {
+        RedactText(line.value, in, f);
+        RedactText(line.note, in, f);
+    }
+}
+
 } // namespace
 
 bool ProbeExits(const IpInfo& base, ProbeInput& out,
-                const std::wstring& expectedCountry, const std::wstring& expectedAsn)
+                const std::wstring& expectedCountry, const std::wstring& expectedAsn,
+                bool force)
 {
     out = ProbeInput();
     out.expectedCountry = expectedCountry;
     out.expectedAsn = expectedAsn;
     CollectNetFacts(out.facts);
 
-    out.v4.ok      = !base.ip.empty();
-    out.v4.ip      = base.ip;
-    out.v4.country = base.country;
-    out.v4.region  = base.region;
-    out.v4.city    = base.city;
-    out.v4.asn     = base.asn;
-    out.v4.org     = base.org;
-    out.v4.utcOffsetMinutes = base.utcOffsetMinutes;
-    if (!out.v4.ok) out.v4.err = L"没有可用的出口 IP";
+    const IpKind baseKind = ClassifyIp(base.ip);
+    if (baseKind == IpKind::V4) {
+        out.v4.ok      = true;
+        out.v4.ip      = base.ip;
+        out.v4.country = base.country;
+        out.v4.region  = base.region;
+        out.v4.city    = base.city;
+        out.v4.asn     = base.asn;
+        out.v4.org     = base.org;
+        out.v4.utcOffsetMinutes = base.utcOffsetMinutes;
+    } else if (baseKind == IpKind::V6) {
+        // 主源走了 IPv6：卡片显示这个地址没问题，但不能把它冒充成 IPv4 出口。
+        // 诊断要的 v4 出口单独补一次；v6 直接用主源结果，避免再撞一次慢探测。
+        out.v4.err = L"主数据源返回 IPv6，正在单独探测 IPv4";
+        ProbeV4Exit(out.v4, 2500, g_cache);
+
+        out.v6.ok = true;
+        out.v6.ip = base.ip;
+        out.v6.country = base.country;
+        out.v6.region = base.region;
+        out.v6.city = base.city;
+        out.v6.asn = base.asn;
+        out.v6.org = base.org;
+        out.v6.utcOffsetMinutes = base.utcOffsetMinutes;
+        if (out.v6.asn.empty() || out.v6.country.empty())
+            FillIpGeo(out.v6.ip, out.v6, g_cache);
+    } else {
+        out.v4.err = L"没有可用的出口 IP";
+    }
 
     // 时区偏移：数据源没给就问 ipwho.is（免费、无 key）。
     // 只取 offset / org，不覆盖已有的国家城市——那个 IP 可能是另一协议族的。
     // 时区偏移只跟出口 IP 有关，同一个出口不必每轮重查（每次 1~3 秒）。
-    static std::wstring offsetIp;
-    static int          offsetValue = kNoOffset;
     if (out.v4.ok && out.v4.utcOffsetMinutes == kNoOffset &&
-        !offsetIp.empty() && offsetIp == out.v4.ip) {
-        out.v4.utcOffsetMinutes = offsetValue;
+        !g_cache.offsetIp.empty() && g_cache.offsetIp == out.v4.ip) {
+        out.v4.utcOffsetMinutes = g_cache.offsetValue;
     }
 
-    if (out.v4.ok && out.v4.utcOffsetMinutes == kNoOffset) {
+    // 主源本来就是 v4 时才用 kUrlGeo 补偏移；v6 主源的 v4 由 ProbeV4Exit
+    // 查具体 IP，不能拿当前出口（可能是 v6）的偏移去套。
+    if (baseKind == IpKind::V4 && out.v4.ok && out.v4.utcOffsetMinutes == kNoOffset) {
         std::string body;
         std::wstring err;
         if (HttpGet(kUrlGeo, body, err, 3000)) {
             bool found = false;
-            long long off = JsonInt(body, "offset", found);
+            long long off = JsonInt(body, "timezone.offset", found);
+            if (!found) off = JsonInt(body, "offset", found);
             if (found) {
                 out.v4.utcOffsetMinutes = (int)(off / 60);
-                offsetIp = out.v4.ip;
-                offsetValue = out.v4.utcOffsetMinutes;
+                g_cache.offsetIp = out.v4.ip;
+                g_cache.offsetValue = out.v4.utcOffsetMinutes;
             }
-            if (out.v4.org.empty()) out.v4.org = Utf8ToWide(JsonStr(body, "org"));
+            if (out.v4.org.empty()) {
+                out.v4.org = Utf8ToWide(JsonStr(body, "connection.org"));
+                if (out.v4.org.empty()) out.v4.org = Utf8ToWide(JsonStr(body, "org"));
+            }
             if (out.v4.asn.empty()) {
-                long long asn = JsonInt(body, "asn", found);
+                long long asn = JsonInt(body, "connection.asn", found);
+                if (!found) asn = JsonInt(body, "asn", found);
                 if (found && asn > 0) out.v4.asn = L"AS" + std::to_wstring(asn);
             }
         }
     }
 
-    // v6 出口：优先取真实地址；取不到再退回连通性测试。
-    // 2.5s 是后台诊断的超时，卡片 IP 不会被它阻塞（见 app.cpp 的两阶段抓取）。
-    ProbeV6Exit(out.v6, 2500,
-                out.v4.ip + L"|" + (out.facts.tunDefaultV6 ? L"1" : L"0") +
-                (out.facts.hasPublicV6 ? L"1" : L"0"));
+    // v6 出口：主源是 v4 时才需要单独探；主源是 v6 的话上面已经用上了。
+    if (baseKind == IpKind::V4) {
+        ProbeV6Exit(out.v6, 2500,
+                    out.v4.ip + L"|" + (out.facts.tunDefaultV6 ? L"1" : L"0") +
+                    (out.facts.hasPublicV6 ? L"1" : L"0"), force, g_cache);
+    }
 
-    ProbeDns(out);
+    ProbeDns(out, g_cache);
 
     return true;
 }
 
-bool RunDiag(const std::wstring& outPath, std::wstring& err)
+bool RunDiag(const std::wstring& outPath, bool redact, DiagFailOn failOn,
+             std::wstring& err, int& exitCode)
 {
+    exitCode = 0;
     if (outPath.empty()) {
         err = L"--diag 需要一个输出路径";
         return false;
@@ -458,9 +576,11 @@ bool RunDiag(const std::wstring& outPath, std::wstring& err)
     std::wstring herr;
 
     // ── v4 出口 ──────────────────────────────────────────────────────
-    if (HttpGet(kUrlV4, body, herr, 0, /*direct=*/true, /*lenientTls=*/true)) {
+    bool v4Lenient = false;
+    if (HttpGetIpEcho(kUrlV4, body, herr, 0, v4Lenient)) {
         in.v4.ip = Trim(Utf8ToWide(body));
         in.v4.ok = !in.v4.ip.empty();
+        in.v4.tlsLenient = v4Lenient;
         if (!in.v4.ok) in.v4.err = L"响应为空";
     } else {
         in.v4.err = herr;
@@ -476,24 +596,31 @@ bool RunDiag(const std::wstring& outPath, std::wstring& err)
     }
 
     // ── v6 出口 ──────────────────────────────────────────────────────
+    ProbeCache localCache;
     ProbeV6Exit(in.v6, 3000,
                 in.v4.ip + L"|" + (in.facts.tunDefaultV6 ? L"1" : L"0") +
-                (in.facts.hasPublicV6 ? L"1" : L"0"));
+                (in.facts.hasPublicV6 ? L"1" : L"0"), /*force=*/true, localCache);
 
-    ProbeDns(in);
+    ProbeDns(in, localCache);
 
     Diagnosis d = Diagnose(in);
     std::vector<Badge> badges = BuildBadges(d);
 
+    // 判定用原始数据；展示/落盘用脱敏副本，避免把 LAN IP / 公网 IPv6 贴进 issue。
+    Diagnosis reported = d;
+    if (redact) RedactDiagnosis(reported, in, facts);
+
     // ── 文本报告 ──────────────────────────────────────────────────────
     std::wstring t;
     t += L"ip-float 网络诊断\n";
-    t += L"生成时间 " + LocalTimeString(NowFileTime()) + L"\n\n";
+    t += L"生成时间 " + LocalTimeString(NowFileTime()) + L"\n";
+    if (redact) t += L"已脱敏：IP / 网卡名 / 代理地址已替换为占位符\n";
+    t += L"\n";
     if (!factsOk) t += L"采集本机信息失败：" + facts.err + L"\n\n";
-    t += L"结论 [" + std::wstring(SevW(d.verdict)) + L"] " + d.summary + L"\n";
-    t += L"依据 " + d.evidence + L"\n\n";
+    t += L"结论 [" + std::wstring(SevW(reported.verdict)) + L"] " + reported.summary + L"\n";
+    t += L"依据 " + reported.evidence + L"\n\n";
 
-    for (const auto& l : d.lines) {
+    for (const auto& l : reported.lines) {
         std::wstring tag = std::wstring(L"[") + SevW(l.sev) + L"]";
         t += Pad(tag, 7) + Pad(l.label, 12) + l.value + L"\n";
         if (!l.note.empty()) t += std::wstring(19, L' ') + l.note + L"\n";
@@ -524,6 +651,8 @@ bool RunDiag(const std::wstring& outPath, std::wstring& err)
     if (!in.v4.err.empty()) t += L"v4 探测     " + in.v4.err + L"\n";
     if (!in.v6.ok) t += L"v6 探测     " + in.v6.err + L"\n";
 
+    if (redact) RedactText(t, in, facts);
+
     std::wstring jsonPath;
     std::wstring txtPath = SplitPaths(outPath, jsonPath);
 
@@ -533,11 +662,14 @@ bool RunDiag(const std::wstring& outPath, std::wstring& err)
     }
 
     std::wstring j = L"{\n";
-    j += L"  \"verdict\": \"" + std::wstring(SevW(d.verdict)) + L"\",\n";
-    j += L"  \"summary\": \"" + JsonEsc(d.summary) + L"\",\n";
-    j += L"  \"evidence\": \"" + JsonEsc(d.evidence) + L"\",\n";
-    j += L"  \"exitV4\": \"" + JsonEsc(in.v4.ip) + L"\",\n";
-    j += L"  \"exitV6\": \"" + JsonEsc(in.v6.ip) + L"\",\n";
+    j += L"  \"verdict\": \"" + std::wstring(SevW(reported.verdict)) + L"\",\n";
+    j += L"  \"summary\": \"" + JsonEsc(reported.summary) + L"\",\n";
+    j += L"  \"evidence\": \"" + JsonEsc(reported.evidence) + L"\",\n";
+    j += L"  \"redacted\": " + std::wstring(redact ? L"true" : L"false") + L",\n";
+    j += L"  \"exitV4\": \"" + JsonEsc(redact ? std::wstring(L"<IPv4>") : in.v4.ip) + L"\",\n";
+    j += L"  \"exitV6\": \"" + JsonEsc(redact ? std::wstring(L"<IPv6>") : in.v6.ip) + L"\",\n";
+    j += L"  \"v4TlsLenient\": " + std::wstring(in.v4.tlsLenient ? L"true" : L"false") + L",\n";
+    j += L"  \"v6TlsLenient\": " + std::wstring(in.v6.tlsLenient ? L"true" : L"false") + L",\n";
     j += L"  \"tunV4\": " + std::wstring(facts.tunDefaultV4 ? L"true" : L"false") + L",\n";
     j += L"  \"tunV6\": " + std::wstring(facts.tunDefaultV6 ? L"true" : L"false") + L",\n";
     j += L"  \"hasPublicV6\": " + std::wstring(facts.hasPublicV6 ? L"true" : L"false") + L",\n";
@@ -550,6 +682,16 @@ bool RunDiag(const std::wstring& outPath, std::wstring& err)
     }
     j += L"]\n}\n";
 
-    WriteFileUtf8(jsonPath, j, false);
+    if (!WriteFileUtf8(jsonPath, j, false)) {
+        err = L"写文件失败：" + jsonPath;
+        return false;
+    }
+
+    if (failOn == DiagFailOn::Bad && d.verdict == Sev::Bad) {
+        exitCode = 2;
+    } else if (failOn == DiagFailOn::Warn &&
+               (d.verdict == Sev::Bad || d.verdict == Sev::Warn)) {
+        exitCode = 2;
+    }
     return true;
 }

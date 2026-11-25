@@ -1,5 +1,6 @@
 // 纯逻辑单测：JSON 解析 / IpInfo / ShortAsn / Ago / URL host。
 // 不建窗口、不联网；build.ps1 -Test 会编译并运行它。
+#include "../src/http.h"
 #include "../src/ipinfo.h"
 #include "../src/util.h"
 
@@ -61,6 +62,24 @@ void TestJson()
     // "country" 不能误命中 "country_code"
     CheckStr(JsonStr(R"({"country_code":"JP","country":"Japan"})", "country"),
              "Japan", "json exact key match");
+
+    const std::string who = R"({"ip":"203.0.113.42",)"
+                            R"("connection":{"asn":17621,"org":"China Unicom"},)"
+                            R"("timezone":{"offset":28800,"utc":"+08:00"}})";
+    CheckStr(JsonStr(who, "connection.org"), "China Unicom", "json nested string");
+    bool found = false;
+    long long asn = JsonInt(who, "connection.asn", found);
+    Check(found && asn == 17621, "json nested int");
+    found = false;
+    long long off = JsonInt(who, "timezone.offset", found);
+    Check(found && off == 28800, "json nested offset");
+    found = false;
+    Check(JsonBool(R"({"ok":true})", "ok", found) && found, "json bool true");
+    found = false;
+    Check(!JsonBool(R"({"ok":false})", "ok", found) && found, "json bool false");
+    found = false;
+    JsonInt(R"({"asn":"17621"})", "asn", found);
+    Check(found, "json int accepts quoted number");
 }
 
 void TestParse()
@@ -90,10 +109,70 @@ void TestParse()
     CheckW(ipapi.country, L"US", "parse ipapi country_code");
     CheckW(ipapi.asn, L"AS13335", "parse ipapi asn field");
 
+    IpInfo who;
+    ok = ParseIpInfo(
+        R"({"ip":"2001:db8::42","country_code":"JP","region":"Tokyo",)"
+        R"("city":"Chiyoda","connection":{"asn":20473,"org":"Vultr"},)"
+        R"("timezone":{"offset":32400,"utc":"+09:00"}})",
+        L"https://ipwho.is/", who, err);
+    Check(ok, "parse ipwho ok");
+    CheckW(who.ip, L"2001:db8::42", "parse ipwho v6 ip");
+    CheckW(who.asn, L"AS20473", "parse ipwho nested asn");
+    CheckW(who.org, L"Vultr", "parse ipwho nested org");
+    Check(who.utcOffsetMinutes == 540, "parse ipwho timezone offset");
+
     IpInfo bad;
+    ok = ParseIpInfo(R"({"ip":"not-an-ip"})", L"test", bad, err);
+    Check(!ok, "parse invalid ip fails");
+    ok = ParseIpInfo(R"({"error":true})", L"test", bad, err);
     ok = ParseIpInfo(R"({"error":true})", L"test", bad, err);
     Check(!ok, "parse missing ip fails");
     Check(!err.empty(), "parse missing ip has error text");
+}
+
+void TestUtcOffset()
+{
+    Check(ParseUtcOffset("+0800") == 480, "utc +0800");
+    Check(ParseUtcOffset("-0500") == -300, "utc -0500");
+    Check(ParseUtcOffset("+08:00") == 480, "utc +08:00");
+    Check(ParseUtcOffset("-05:30") == -330, "utc -05:30");
+    Check(ParseUtcOffset("08:00") == kNoOffset, "utc missing sign");
+    Check(ParseUtcOffset("+8:00") == kNoOffset, "utc short hour");
+    Check(ParseUtcOffset("+25:00") == kNoOffset, "utc hour range");
+    Check(ParseUtcOffset("") == kNoOffset, "utc empty");
+}
+
+void TestExpectedText()
+{
+    std::wstring c, a;
+    ParseExpectedText(L"JP / AS20473", c, a);
+    CheckW(c, L"JP", "expected country");
+    CheckW(a, L"AS20473", "expected asn");
+
+    ParseExpectedText(L"jp,20473", c, a);
+    CheckW(c, L"JP", "expected country lower");
+    CheckW(a, L"AS20473", "expected asn numeric");
+
+    ParseExpectedText(L"20473", c, a);
+    CheckW(c, L"", "expected only asn: no country");
+    CheckW(a, L"AS20473", "expected only asn");
+
+    ParseExpectedText(L"as20473 / jp", c, a);
+    CheckW(c, L"JP", "expected reversed country");
+    CheckW(a, L"AS20473", "expected reversed asn");
+
+    ParseExpectedText(L"  ", c, a);
+    CheckW(c, L"", "expected blank country");
+    CheckW(a, L"", "expected blank asn");
+}
+
+void TestTlsErrors()
+{
+    Check(IsTlsCertErrorText(L"12175：TLS 安全通道失败"), "tls cert 12175");
+    Check(IsTlsCertErrorText(L"12038：证书域名不匹配"), "tls cert 12038");
+    Check(!IsTlsCertErrorText(L"12029：无法连接"), "tls non-cert 12029");
+    Check(!IsTlsCertErrorText(L"HTTP 403"), "tls non-cert http");
+    Check(!IsTlsCertErrorText(L""), "tls empty");
 }
 
 void TestShortAsn()
@@ -130,6 +209,20 @@ void TestUrls()
     CheckW(SourceHost(L"https://ipinfo.io:443/json"), L"ipinfo.io", "source host :443");
     CheckW(SourceHost(L"http://example.com:80/a"), L"example.com", "source host :80");
     CheckW(SourceHost(L"https://ipapi.co/json/"), L"ipapi.co", "source host plain");
+    CheckW(SourceHost(L"https://user:token@example.com/json"), L"example.com",
+           "source host strips userinfo");
+}
+
+void TestIpKind()
+{
+    Check(ClassifyIp(L"203.0.113.42") == IpKind::V4, "ip kind v4");
+    Check(ClassifyIp(L" 203.0.113.42 \t") == IpKind::V4, "ip kind v4 trims spaces");
+    Check(ClassifyIp(L"2001:db8::42") == IpKind::V6, "ip kind v6");
+    Check(ClassifyIp(L"::1") == IpKind::V6, "ip kind v6 loopback");
+    Check(ClassifyIp(L"999.1.1.1") == IpKind::None, "ip kind rejects bad v4");
+    Check(ClassifyIp(L"2001:db8::zz") == IpKind::None, "ip kind rejects bad v6");
+    Check(ClassifyIp(L"") == IpKind::None, "ip kind empty");
+    Check(ClassifyIp(L"ipinfo.io") == IpKind::None, "ip kind rejects host");
 }
 
 } // namespace
@@ -138,9 +231,13 @@ int main()
 {
     TestJson();
     TestParse();
+    TestUtcOffset();
+    TestTlsErrors();
+    TestExpectedText();
     TestShortAsn();
     TestAgo();
     TestUrls();
+    TestIpKind();
 
     if (g_failures == 0) {
         printf("\nall tests passed\n");

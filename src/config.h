@@ -10,11 +10,14 @@ struct Config {
     int          x               = -1;
     int          y               = -1;
     bool         panelOpen       = false;   // 上次退出时诊断窗口是开着还是关着
-    std::wstring source;          // 空 = 用内置的 ipinfo/ipapi 双源
+    std::wstring source;          // 空 = 用内置的 ipinfo/ipwho.is 双源
 
     // 可选期望出口：空 = 不检查。国家码如 JP；ASN 可写 20473 或 AS20473。
     std::wstring expectedCountry;
     std::wstring expectedAsn;
+
+    // 本地时区与出口不一致时是否忽略（远程办公/跨时区常驻的人需要）
+    bool         ignoreTimezone = false;
 
     // x / y == -1 表示还没摆过，由 ApplyLayout 放到右上角。
     // 用 -1 而不是 >= 0 判断，是为了允许负坐标（多屏布局里卡片在左侧屏上）。

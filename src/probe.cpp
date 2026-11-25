@@ -71,6 +71,11 @@ bool SameText(const std::wstring& a, const std::wstring& b)
     return _wcsicmp(a.c_str(), b.c_str()) == 0;
 }
 
+std::wstring TlsNote(const ExitProbe& e)
+{
+    return e.tlsLenient ? L"（TLS 证书未验证）" : std::wstring();
+}
+
 // 配置里允许写 "20473" 或 "as20473"，统一成 IpInfo.asn 的 "AS20473"。
 std::wstring NormalizeAsnText(const std::wstring& raw)
 {
@@ -188,6 +193,7 @@ Diagnosis Diagnose(const ProbeInput& in)
         std::wstring note = v4.country;
         if (!v4.region.empty()) note += (note.empty() ? L"" : L" ") + v4.region;
         if (!v4.city.empty())   note += (note.empty() ? L"" : L" ") + v4.city;
+        note += TlsNote(v4);
         Push(d, LineId::ExitV4, L"IPv4 出口", v4.ip, Sev::Ok, note);
     }
 
@@ -217,22 +223,23 @@ Diagnosis Diagnose(const ProbeInput& in)
     } else if (v4.ok && v6.ip == v4.ip) {
         // v6 请求被 v4 出口承载（回显拿到了 v4 地址）—— 这是正常的，不是矛盾
         Push(d, LineId::ExitV6, L"IPv6 出口", L"由 v4 出口承载", Sev::Ok,
-             L"回显地址与 IPv4 相同：" + v6.ip);
+             L"回显地址与 IPv4 相同：" + v6.ip + TlsNote(v6));
     } else if (v4.ok && !v6.asn.empty() && !v4.asn.empty()) {
         // 比归属，不比地址字符串：v4 与 v6 是不同协议族，地址本来就不会相等
         if (_wcsicmp(v6.asn.c_str(), v4.asn.c_str()) == 0) {
             Push(d, LineId::ExitV6, L"IPv6 出口", L"与 IPv4 同源", Sev::Ok,
-                 v6.ip + L"（同为 " + v6.asn + L"）");
+                 v6.ip + L"（同为 " + v6.asn + L"）" + TlsNote(v6));
         } else {
             Push(d, LineId::ExitV6, L"IPv6 出口", L"与 IPv4 不同源", Sev::Warn,
-                 L"v4 " + v4.asn + L" / v6 " + v6.asn + L"（" + v6.ip + L"）");
+                 L"v4 " + v4.asn + L" / v6 " + v6.asn + L"（" + v6.ip + L"）" +
+                 TlsNote(v6));
         }
     } else if (v4.ok) {
         // 拿不到 v6 出口的归属：只报地址，不判同源，也不报警
         Push(d, LineId::ExitV6, L"IPv6 出口", v6.ip, Sev::Skip,
-             L"拿不到该地址的归属，无法核对是否与 v4 同源");
+             L"拿不到该地址的归属，无法核对是否与 v4 同源" + TlsNote(v6));
     } else {
-        Push(d, LineId::ExitV6, L"IPv6 出口", v6.ip, Sev::Skip);
+        Push(d, LineId::ExitV6, L"IPv6 出口", v6.ip, Sev::Skip, TlsNote(v6));
     }
 
     // ── 归属 / 类型 ──────────────────────────────────────────────────
@@ -251,7 +258,10 @@ Diagnosis Diagnose(const ProbeInput& in)
     PushExpectation(d, in);
 
     // ── 时区一致性 ───────────────────────────────────────────────────
-    if (!v4.ok || v4.utcOffsetMinutes == kUnknownOffset) {
+    if (in.ignoreTimezone) {
+        Push(d, LineId::Tz, L"时区", L"已忽略", Sev::Skip,
+             L"设置中关闭了时区一致性检查", /*na=*/true);
+    } else if (!v4.ok || v4.utcOffsetMinutes == kUnknownOffset) {
         Push(d, LineId::Tz, L"时区", L"未知", Sev::Skip, L"数据源未给出 UTC 偏移");
     } else if (v4.utcOffsetMinutes == f.localOffsetMinutes) {
         Push(d, LineId::Tz, L"时区", L"一致", Sev::Ok,

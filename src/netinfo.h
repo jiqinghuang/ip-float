@@ -33,7 +33,12 @@ struct NetFacts {
     int          locationConsent = -1;      // -1 未知 / 0 关 / 1 开
 
     std::wstring err;                       // 采集失败原因（空 = 正常）
+    std::wstring fingerprint;               // 网络指纹：网卡地址 + 默认路由 + 代理设置
 };
 
 // 全量采集；个别字段读不到只留空，不整体失败。
 bool CollectNetFacts(NetFacts& out);
+
+// 轻量网络指纹：默认路由接口 + 本机地址 + 代理设置。
+// 只用于「变了就刷新」的去重，不参与任何判定；失败返回空串。
+std::wstring NetworkKey();

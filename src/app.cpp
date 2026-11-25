@@ -6,6 +6,7 @@
 #include "diag.h"
 #include "http.h"
 #include "ipinfo.h"
+#include "netinfo.h"
 #include "selftest.h"
 #include "settings_dlg.h"
 #include "tray.h"
@@ -41,6 +42,7 @@ const UINT WM_APP_DIAGNOSED = WM_APP + 4;  // 第二阶段：出口体检 / 徽�
 
 enum {
     IDM_REFRESH = 100,
+    IDM_PAUSE,
     IDM_INTERVAL_BASE = 200,
     IDM_SETTINGS = 300,
     IDM_DIAG,
@@ -57,11 +59,17 @@ const int kIntervalCount = 6;
 const UINT kTrayRetryMs = 5000;
 const int  kTrayRetries = 3;
 
+// 睡眠唤醒：不依赖 powrprof.h 的宏，直接用稳定的事件号
+const UINT kPbtResumeSuspend   = 0x0007;   // PBT_APMRESUMESUSPEND
+const UINT kPbtResumeAutomatic = 0x0012;   // PBT_APMRESUMEAUTOMATIC
+
 struct FetchJob {
     HWND hwnd = nullptr;
     std::vector<std::wstring> sources;
     std::wstring expectedCountry;
     std::wstring expectedAsn;
+    bool         ignoreTimezone = false;
+    bool         force = false;   // 用户显式刷新：绕过 v6 结果缓存
 };
 
 // 第一阶段：只带 IP，先让卡片显示出来。
@@ -109,11 +117,15 @@ struct App {
     // 只有 UI 线程读写 busy；worker 不持有任何 App 指针，避免退出时 use-after-free
     std::atomic<bool> busy{ false };
     bool              fetchPending = false;
+    bool              fetchPendingForce = false;
     bool              timerWarn = false;
+    bool              paused = false;          // 暂停自动刷新（不持久化）
+    std::wstring      netKey;                 // 30s tick 的网络指纹
 
     float scale = 1.0f;
     int   flashTicks = 0;
     bool  shotDone = false;
+    bool  selfTestFailed = false;   // --shot / --shot-dlg 抓图失败时以非 0 退出
 
     Tray tray;
     int  trayRetries = 0;
@@ -121,11 +133,40 @@ struct App {
 
 App* g_app = nullptr;
 
+const wchar_t* VerdictText(Sev s)
+{
+    switch (s) {
+        case Sev::Ok:   return L"正常";
+        case Sev::Warn: return L"注意";
+        case Sev::Bad:  return L"问题";
+        default:        return L"未测";
+    }
+}
+
+std::wstring TrayTip(const App& app)
+{
+    if (app.paused) return L"ip-float — 已暂停刷新";
+    if (!app.hasInfo) {
+        return app.lastError ? L"ip-float — 获取失败" : L"ip-float — 查询中…";
+    }
+
+    std::wstring tip = L"ip-float — " + app.info.ip;
+    if (!app.info.asn.empty()) tip += L" · " + app.info.asn;
+    if (!app.badges.empty()) tip += L" · " + std::wstring(VerdictText(app.verdict));
+    if (app.lastError) tip += L" · 刷新失败";
+    return tip;
+}
+
+void UpdateTrayTip(App& app)
+{
+    TraySetTip(app.tray, TrayTip(app));
+}
+
 bool FetchNow(const std::vector<std::wstring>& sources, IpInfo& out,
               std::wstring& err, std::wstring& errFull)
 {
     std::wstring lastErr = L"没有可用数据源";
-    std::wstring lastFull = lastErr;
+    std::wstring allErr;
     for (const std::wstring& url : sources) {
         std::string body;
         std::wstring e;
@@ -133,10 +174,12 @@ bool FetchNow(const std::vector<std::wstring>& sources, IpInfo& out,
             if (ParseIpInfo(body, url, out, e)) return true;
         }
         lastErr = e;
-        lastFull = url + L" → " + e;
+        // 把每个源的失败都留下：只显示最后一个的话，ipinfo 429 + 兜底 403 时
+        // 用户会以为是自己的出口被封，看不到主源限流的真实原因。
+        allErr += (allErr.empty() ? L"" : L"；") + SourceHost(url) + L"：" + e;
     }
     err = lastErr;
-    errFull = lastFull;
+    errFull = allErr.empty() ? lastErr : allErr;
     return false;
 }
 
@@ -158,7 +201,8 @@ unsigned __stdcall FetchThread(void* param)
 
     // 出口探测只依赖「拿到的 IP」，所以抓取失败也照样能算（v4 会标成探测失败）
     ProbeInput in;
-    ProbeExits(base, in, job->expectedCountry, job->expectedAsn);
+    ProbeExits(base, in, job->expectedCountry, job->expectedAsn, job->force);
+    in.ignoreTimezone = job->ignoreTimezone;
     Diagnosis diag = Diagnose(in);
     auto* diagResult = new DiagResult();
     diagResult->badges = BuildBadges(diag);
@@ -171,13 +215,15 @@ unsigned __stdcall FetchThread(void* param)
     return 0;
 }
 
-void StartFetch(App& app)
+void StartFetch(App& app, bool force = false)
 {
     if (app.opt.demo) return;
 
     if (app.busy.exchange(true)) {
-        // 正在抓取就记账，抓完再补一次；否则“改间隔立即刷新”会被静默吃掉
+        // 正在抓取就记账，抓完再补一次；否则“改间隔立即刷新”会被静默吃掉。
+        // force 也要记住：期间点过刷新，补的那次仍应绕过 v6 缓存。
         app.fetchPending = true;
+        app.fetchPendingForce = app.fetchPendingForce || force;
         return;
     }
 
@@ -186,6 +232,8 @@ void StartFetch(App& app)
     job->sources = app.sources;
     job->expectedCountry = app.cfg.expectedCountry;
     job->expectedAsn = app.cfg.expectedAsn;
+    job->ignoreTimezone = app.cfg.ignoreTimezone;
+    job->force = force;
 
     HANDLE t = (HANDLE)_beginthreadex(nullptr, 0, FetchThread, job, 0, nullptr);
     if (t) {
@@ -208,7 +256,7 @@ void OpenDiagWindow(App& app)
     }
     // 窗口先显示上次结果，同时后台跑一轮新的
     SetDiagBusy(true);
-    StartFetch(app);
+    StartFetch(app, /*force=*/true);
 }
 
 void PersistConfig(App& app)
@@ -296,6 +344,7 @@ void ApplyLayout(App& app, const RECT* keepPos)
 void ResetRefreshTimer(App& app)
 {
     KillTimer(app.hwnd, ID_TIMER_REFRESH);
+    if (app.paused) return;
     UINT ms = (UINT)app.cfg.intervalMinutes * 60000u;
     if (ms < 1000u) ms = 1000u;
 
@@ -313,7 +362,7 @@ void SetInterval(App& app, int minutes)
     app.cfg.intervalMinutes = minutes;
     PersistConfig(app);
     ResetRefreshTimer(app);
-    StartFetch(app);   // 正在抓取时会记账，抓完自动补一次
+    StartFetch(app, /*force=*/true);   // 正在抓取时会记账，抓完自动补一次
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
 
@@ -420,6 +469,7 @@ void BuildMenu(App& app, HMENU menu, bool fromTray)
     }
 
     AppendMenuW(menu, MF_STRING, IDM_REFRESH, L"立即刷新");
+    AppendMenuW(menu, MF_STRING, IDM_PAUSE, app.paused ? L"恢复刷新" : L"暂停刷新");
 
     HMENU sub = CreatePopupMenu();
     for (int i = 0; i < kIntervalCount; ++i) {
@@ -475,11 +525,17 @@ void ShowSettings(App& app)
     SettingsDialogResult r;
     if (!ShowSettingsDialog(app.hwnd, in, r)) return;
 
-    bool intervalChanged = (r.interval != app.cfg.intervalMinutes);
+    const bool intervalChanged = (r.interval != app.cfg.intervalMinutes);
+    const bool expectChanged = (r.expectedCountry != app.cfg.expectedCountry) ||
+                               (r.expectedAsn != app.cfg.expectedAsn) ||
+                               (r.ignoreTimezone != app.cfg.ignoreTimezone);
 
     app.cfg.intervalMinutes = r.interval;
     app.cfg.opacityPercent = r.opacity;
     app.cfg.topMost = r.topMost;
+    app.cfg.expectedCountry = r.expectedCountry;
+    app.cfg.expectedAsn = r.expectedAsn;
+    app.cfg.ignoreTimezone = r.ignoreTimezone;
 
     if (r.autoStart != app.cfg.autoStart) {
         app.cfg.autoStart = r.autoStart;
@@ -491,7 +547,7 @@ void ShowSettings(App& app)
     ApplyTopMost(app);
     ApplyAlpha(app);
     ResetRefreshTimer(app);
-    if (intervalChanged) StartFetch(app);
+    if (intervalChanged || expectChanged) StartFetch(app, /*force=*/true);
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
 
@@ -514,6 +570,7 @@ void AppOnIpFetched(App& app, FetchResult* r)
     }
 
     // 先让第一行和第二行出来；第三行保留上一轮徽章，等 WM_APP_DIAGNOSED 再更新。
+    UpdateTrayTip(app);
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
 
@@ -530,10 +587,13 @@ void AppOnDiagnosed(App& app, DiagResult* r)
     }
 
     if (app.fetchPending) {
+        const bool force = app.fetchPendingForce;
         app.fetchPending = false;
-        StartFetch(app);
+        app.fetchPendingForce = false;
+        StartFetch(app, force);
     }
 
+    UpdateTrayTip(app);
     InvalidateRect(app.hwnd, nullptr, FALSE);
 
     if (DiagWindowOpen()) {
@@ -603,13 +663,23 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_TIMER:
         if (wp == ID_TIMER_REFRESH) {
-            StartFetch(*app);
+            if (!app->paused) StartFetch(*app);
         } else if (wp == ID_TIMER_TICK) {
+            // 在现有 30s tick 上做廉价指纹：VPN 连接/断开后不必等满一个刷新间隔。
+            if (!app->paused) {
+                const std::wstring key = NetworkKey();
+                if (!key.empty()) {
+                    if (!app->netKey.empty() && key != app->netKey)
+                        StartFetch(*app, /*force=*/true);
+                    app->netKey = key;
+                }
+            }
             InvalidateRect(hwnd, nullptr, FALSE);
         } else if (wp == ID_TIMER_SHOT) {
             KillTimer(hwnd, ID_TIMER_SHOT);
             std::wstring err;
-            CaptureWindowToPng(hwnd, app->opt.shotPath, err);
+            if (!CaptureWindowToPng(hwnd, app->opt.shotPath, err))
+                app->selfTestFailed = true;
             DestroyWindow(hwnd);
         } else if (wp == ID_TIMER_FLASH) {
             FlashWindow(hwnd, TRUE);
@@ -621,9 +691,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         return 0;
 
+    case WM_POWERBROADCAST:
+        // 睡眠/休眠回来：网络可能已经换了一条路，强制刷一次。
+        if (wp == kPbtResumeSuspend || wp == kPbtResumeAutomatic) {
+            app->netKey.clear();
+            if (!app->paused) StartFetch(*app, /*force=*/true);
+        }
+        return TRUE;
+
     case WM_DIAG_REFRESH:
         SetDiagBusy(true);
-        StartFetch(*app);
+        StartFetch(*app, /*force=*/true);
         return 0;
 
     case WM_DIAG_CLOSED:
@@ -652,7 +730,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
 
     case WM_LBUTTONDBLCLK:
-        StartFetch(*app);
+        StartFetch(*app, /*force=*/true);
         return 0;
 
     case WM_LBUTTONDOWN:
@@ -663,7 +741,20 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_COMMAND: {
         int id = LOWORD(wp);
         if (id == IDM_REFRESH) {
-            StartFetch(*app);
+            StartFetch(*app, /*force=*/true);
+        } else if (id == IDM_PAUSE) {
+            app->paused = !app->paused;
+            if (app->paused) {
+                KillTimer(hwnd, ID_TIMER_REFRESH);
+                app->fetchPending = false;
+                app->fetchPendingForce = false;
+            } else {
+                ResetRefreshTimer(*app);
+                app->netKey = NetworkKey();
+                StartFetch(*app, /*force=*/true);
+            }
+            UpdateTrayTip(*app);
+            InvalidateRect(hwnd, nullptr, FALSE);
         } else if (id >= IDM_INTERVAL_BASE && id < IDM_INTERVAL_BASE + kIntervalCount) {
             SetInterval(*app, kIntervals[id - IDM_INTERVAL_BASE]);
         } else if (id == IDM_SETTINGS) {
@@ -765,7 +856,9 @@ int RunApp(const AppOptions& opt)
         app.sources.push_back(app.cfg.source);
     } else {
         app.sources.push_back(L"https://ipinfo.io/json");
-        app.sources.push_back(L"https://ipapi.co/json/");
+        // ipapi.co 在不少网络/出口上会被 Cloudflare 直接 403；ipwho.is 无需 key，
+        // 同一份解析器也支持它的 connection.asn / timezone.offset 嵌套字段。
+        app.sources.push_back(L"https://ipwho.is/");
     }
 
     app.icon = (HICON)LoadImageW(app.inst, MAKEINTRESOURCEW(1), IMAGE_ICON,
@@ -819,6 +912,7 @@ int RunApp(const AppOptions& opt)
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);
 
     TrayInit(app.tray, hwnd, app.icon, WM_APP_TRAY, L"ip-float — 出口 IP");
+    UpdateTrayTip(app);
     if (!TrayAdd(app.tray)) {
         app.trayRetries = kTrayRetries;
         SetTimer(hwnd, ID_TIMER_TRAY_RETRY, kTrayRetryMs, nullptr);
@@ -843,11 +937,13 @@ int RunApp(const AppOptions& opt)
             in.shotPath = opt.dlgShotPath;
             SettingsDialogResult res;
             ShowSettingsDialog(hwnd, in, res);
+            if (res.shotFailed) app.selfTestFailed = true;
             PostQuitMessage(0);
         }
     } else {
         StartFetch(app);
         ResetRefreshTimer(app);
+        app.netKey = NetworkKey();
         SetTimer(hwnd, ID_TIMER_TICK, 30000, nullptr);
         // 上次退出时诊断窗口是开着的 —— 等第一轮抓取完成再开，
         // 否则会先弹出一个只有「结论」两行的空窗口，几秒后再跳成完整高度
@@ -870,5 +966,5 @@ int RunApp(const AppOptions& opt)
         app.icon = nullptr;
     }
     g_app = nullptr;
-    return 0;
+    return app.selfTestFailed ? 1 : 0;
 }

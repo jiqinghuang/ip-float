@@ -98,6 +98,19 @@ std::wstring CodeText(const wchar_t* what, DWORD code)
 
 } // namespace
 
+bool IsTlsCertErrorText(const std::wstring& err)
+{
+    // 这些码都是「证书本身不可信/不匹配」，lenient 标志能救回来；
+    // 12185（客户端证书缺私钥）不属于其中，降级也没用。
+    static const wchar_t* kCodes[] = {
+        L"12037", L"12038", L"12045", L"12057",
+        L"12169", L"12170", L"12175", L"12179",
+    };
+    for (const wchar_t* code : kCodes)
+        if (err.find(code) != std::wstring::npos) return true;
+    return false;
+}
+
 bool HttpGet(const std::wstring& url, std::string& body, std::wstring& err,
              int timeoutMs, bool direct, bool lenientTls)
 {

@@ -124,6 +124,7 @@ bool LoadConfig(const std::wstring& path, Config& cfg)
     s.x               = (int)GetPrivateProfileIntW(kSection, L"x", -1, p);
     s.y               = (int)GetPrivateProfileIntW(kSection, L"y", -1, p);
     s.panelOpen       = GetPrivateProfileIntW(kSection, L"panelOpen", 0, p) != 0;
+    s.ignoreTimezone  = GetPrivateProfileIntW(kSection, L"ignoreTimezone", 0, p) != 0;
 
     wchar_t src[2048] = {};
     GetPrivateProfileStringW(kSection, L"source", L"", src, 2048, p);
@@ -167,6 +168,7 @@ bool SaveConfig(const std::wstring& path, const Config& cfg)
     put(L"source",          cfg.source);   // 空值 = 删除该键，恢复内置源
     put(L"expectedCountry", cfg.expectedCountry);
     put(L"expectedAsn",     cfg.expectedAsn);
+    put(L"ignoreTimezone", cfg.ignoreTimezone ? L"1" : L"0");
 
     return ok;
 }
@@ -195,8 +197,8 @@ bool SetAutoStart(bool on)
 
     LSTATUS st = ERROR_SUCCESS;
     if (on) {
-        wchar_t exe[MAX_PATH] = {};
-        if (GetModuleFileNameW(nullptr, exe, MAX_PATH) == 0) {
+        const std::wstring exe = ExePath();
+        if (exe.empty()) {
             RegCloseKey(k);
             return false;
         }

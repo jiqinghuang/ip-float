@@ -11,3 +11,6 @@
 // 普通数据源请求必须保持严格校验。
 bool HttpGet(const std::wstring& url, std::string& body, std::wstring& err,
              int timeoutMs = 0, bool direct = false, bool lenientTls = false);
+
+// 错误文本里是否含证书校验类 WinHTTP 码。调用方据此决定「严格失败后是否降级」。
+bool IsTlsCertErrorText(const std::wstring& err);

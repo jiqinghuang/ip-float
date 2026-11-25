@@ -8,6 +8,7 @@
 #include <windows.h>
 #include <iphlpapi.h>
 
+#include <algorithm>
 #include <cwctype>
 #include <string>
 #include <vector>
@@ -98,15 +99,21 @@ bool LoadAdapters(std::vector<Adapter>& out, std::wstring& err)
     std::vector<BYTE> buf(size);
     ULONG flags = GAA_FLAG_INCLUDE_GATEWAYS | GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST;
 
+    bool loaded = false;
     for (int attempt = 0; attempt < 3; ++attempt) {
         ULONG rc = GetAdaptersAddresses(AF_UNSPEC, flags, nullptr,
                                        (IP_ADAPTER_ADDRESSES*)buf.data(), &size);
-        if (rc == ERROR_SUCCESS) break;
+        if (rc == ERROR_SUCCESS) { loaded = true; break; }
         if (rc != ERROR_BUFFER_OVERFLOW) {
             err = L"GetAdaptersAddresses 失败（" + std::to_wstring(rc) + L"）";
             return false;
         }
         buf.resize(size);
+    }
+    // 连续三次都 overflow（网卡在快速增删）时 buffer 仍可能不完整，别拿它当有效数据解析
+    if (!loaded) {
+        err = L"GetAdaptersAddresses 连续溢出，网卡列表不稳定";
+        return false;
     }
 
     for (auto* a = (IP_ADAPTER_ADDRESSES*)buf.data(); a; a = a->Next) {
@@ -195,6 +202,24 @@ bool CollectNetFacts(NetFacts& out)
         return false;
     }
 
+    // 网络指纹：所有 UP 网卡的地址 + 默认路由 + 代理设置。
+    // 不只看主网卡：VPN 服务器切换时 TUN 的本地地址/路由 next hop 通常会变，
+    // 只看主网卡会漏掉这种「出口换了但物理网卡没动」的情况。
+    {
+        std::vector<std::wstring> parts;
+        for (const auto& a : ads) {
+            if (!a.up || a.loopback) continue;
+            parts.push_back(std::to_wstring(a.if4) + L"|" + std::to_wstring(a.if6) + L"|" +
+                            a.friendly + L"|" + a.ipv4 + L"|" + a.publicV6 + L"|" +
+                            (a.hasGateway ? L"gw" : L"-"));
+        }
+        std::sort(parts.begin(), parts.end());
+        for (const auto& p : parts) { out.fingerprint += p; out.fingerprint += L'\n'; }
+        out.fingerprint += L"proxy|" + std::wstring(out.proxyEnabled ? L"1" : L"0") +
+                           L"|" + out.proxyServer + L"|" +
+                           (out.pacConfigured ? L"pac" : L"-") + L"\n";
+    }
+
     // 主物理网卡：UP、非回环、有默认网关、**有 MAC**。
     // 关键是有 MAC —— TUN 网卡（Wintun/DCO）同样有网关，而且枚举顺序还在前面，
     // 不靠 MAC 区分就会把 TUN 认成物理网卡，于是「路由没走物理网卡」永远为假。
@@ -219,6 +244,7 @@ bool CollectNetFacts(NetFacts& out)
         out.lanIp = primary->ipv4;
         out.lanAdapter = primary->friendly;
     }
+    out.fingerprint += L"primary|" + out.lanAdapter + L"|" + out.lanIp + L"\n";
 
     // 全局 IPv6：优先取主网卡的
     if (primary && !primary->publicV6.empty()) {
@@ -243,16 +269,25 @@ bool CollectNetFacts(NetFacts& out)
 
     DWORD idx4 = 0, idx6 = 0;
     std::wstring hop4, hop6;
-    if (BestRoute(L"1.1.1.1", AF_INET, idx4, hop4) && primary && primary->if4 != 0) {
-        out.tunDefaultV4 = (idx4 != primary->if4);
-        if (out.tunDefaultV4) {
-            out.tunIfName = ifName(idx4, false);
-            out.tunAdapter = out.tunIfName;
+    if (BestRoute(L"1.1.1.1", AF_INET, idx4, hop4)) {
+        out.fingerprint += L"route4|" + std::to_wstring(idx4) + L"|" + hop4 + L"\n";
+        if (primary && primary->if4 != 0) {
+            out.tunDefaultV4 = (idx4 != primary->if4);
+            if (out.tunDefaultV4) {
+                out.tunIfName = ifName(idx4, false);
+                out.tunAdapter = out.tunIfName;
+            }
         }
     }
-    if (BestRoute(L"2606:4700:4700::1111", AF_INET6, idx6, hop6) && primary && primary->if6 != 0) {
-        out.tunDefaultV6 = (idx6 != primary->if6);
+    if (BestRoute(L"2606:4700:4700::1111", AF_INET6, idx6, hop6)) {
+        out.fingerprint += L"route6|" + std::to_wstring(idx6) + L"|" + hop6 + L"\n";
+        if (primary && primary->if6 != 0) {
+            out.tunDefaultV6 = (idx6 != primary->if6);
+        }
     }
+    out.fingerprint += L"tun|" + std::wstring(out.tunDefaultV4 ? L"4" : L"-") +
+                       std::wstring(out.tunDefaultV6 ? L"6" : L"-") + L"|" +
+                       out.tunIfName + L"\n";
 
     // ── 时区 ──────────────────────────────────────────────────────────
     TIME_ZONE_INFORMATION tzi = {};
@@ -262,8 +297,16 @@ bool CollectNetFacts(NetFacts& out)
     else if (tzState == TIME_ZONE_ID_STANDARD) bias += (int)tzi.StandardBias;
     out.localOffsetMinutes = -bias;
     out.localTzName = tzi.StandardName;
+    out.fingerprint += L"tz|" + std::to_wstring(out.localOffsetMinutes) + L"\n";
 
     // ── 定位服务 ──────────────────────────────────────────────────────
     out.locationConsent = ReadLocationConsent();
     return true;
+}
+
+std::wstring NetworkKey()
+{
+    NetFacts f;
+    if (!CollectNetFacts(f)) return std::wstring();
+    return f.fingerprint;
 }

@@ -53,6 +53,16 @@ bool ParseArgs(AppOptions& opt, std::wstring& renderPath, float& renderScale,
             ok = TakeArg(argc, argv, i, renderDlgPath);
         } else if (a == L"--diag") {
             ok = TakeArg(argc, argv, i, diagPath);
+        } else if (a == L"--redact") {
+            opt.diagRedact = true;
+        } else if (a == L"--fail-on") {
+            std::wstring v;
+            ok = TakeArg(argc, argv, i, v);
+            if (ok) {
+                if (v == L"bad")       opt.diagFailOn = 1;
+                else if (v == L"warn") opt.diagFailOn = 2;
+                else ok = false;   // 只接受 bad / warn，拼错就报错，别静默忽略
+            }
         } else if (a == L"--render") {
             ok = TakeArg(argc, argv, i, renderPath);
         } else if (a == L"--render-scale") {
@@ -125,7 +135,11 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         rc = RenderDiagToPng(renderDlgPath, renderScale, d, now, err) ? 0 : 1;
     } else if (!diagPath.empty()) {
         std::wstring err;
-        rc = RunDiag(diagPath, err) ? 0 : 1;
+        int code = 0;
+        DiagFailOn failOn = opt.diagFailOn == 1 ? DiagFailOn::Bad
+                          : opt.diagFailOn == 2 ? DiagFailOn::Warn
+                                                : DiagFailOn::None;
+        rc = RunDiag(diagPath, opt.diagRedact, failOn, err, code) ? code : 1;
     } else {
         rc = RunApp(opt);
     }

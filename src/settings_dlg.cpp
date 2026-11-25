@@ -4,6 +4,7 @@
 #include "util.h"
 
 #include <gdiplus.h>
+#include <cwctype>
 
 using namespace Gdiplus;
 
@@ -17,6 +18,8 @@ const int ID_EDIT_INTERVAL = 1001;
 const int ID_CHK_TOPMOST   = 1002;
 const int ID_CHK_AUTOSTART = 1003;
 const int ID_EDIT_OPACITY  = 1004;
+const int ID_EDIT_EXPECTED = 1005;
+const int ID_CHK_IGNORE_TZ = 1006;
 
 const Color kFieldBg  (255,  50,  53,  60);
 const Color kDlgBg    (255,  38,  40,  45);
@@ -40,8 +43,10 @@ struct DlgState {
     HWND hwnd = nullptr;
     HWND edit = nullptr;
     HWND editOpacity = nullptr;
+    HWND editExpected = nullptr;
     HWND chkTop = nullptr;
     HWND chkAuto = nullptr;
+    HWND chkIgnoreTz = nullptr;
     HWND btnOk = nullptr;
     HWND btnCancel = nullptr;
 
@@ -56,6 +61,10 @@ struct DlgState {
 
     bool topMost = true;
     bool autoStart = false;
+    bool ignoreTz = false;
+    std::wstring expectedCountry;
+    std::wstring expectedAsn;
+    bool shotFailed = false;
 
     float scale = 1.0f;
     std::wstring shotPath;
@@ -73,9 +82,11 @@ struct DlgState {
 
     DlgField fInterval = {};
     DlgField fOpacity = {};
+    DlgField fExpected = {};
     RECT noteRc = {};
     RECT chkTopRc = {};
     RECT chkAutoRc = {};
+    RECT chkIgnoreRc = {};
     RECT btnOkRc = {};
     RECT btnCancelRc = {};
 
@@ -157,13 +168,20 @@ void DlgBuildMetrics(DlgState& s, HDC dc)
     if (c > w) w = c;
     c = s.pad * 2 + DlgTextW(dc, s.base, L"不透明度");
     if (c > w) w = c;
+    c = s.pad * 2 + DlgTextW(dc, s.base, L"期望出口（可选）");
+    if (c > w) w = c;
+    c = s.pad * 2 + DlgTextW(dc, s.base, L"忽略时区不一致");
+    if (c > w) w = c;
+    c = s.pad * 2 + (s.editW + ScalePx(120, s.scale)) + s.inset * 2 +
+        DlgTextW(dc, s.small, L"JP / AS20473") + ScalePx(12, s.scale);
+    if (c > w) w = c;
     s.clientW = w;
 
     const int pad = s.pad;
     const int cw = s.clientW;
     int y = pad;
 
-    auto field = [&](DlgField& f, const wchar_t* hint) {
+    auto field = [&](DlgField& f, const wchar_t* hint, int editWidth = 0) {
         f.label = RECT{ pad, y, cw - pad, y + s.baseH };
         y += s.baseH + ScalePx(8, s.scale);
         f.box = RECT{ pad, y, cw - pad, y + s.fieldH };
@@ -171,8 +189,9 @@ void DlgBuildMetrics(DlgState& s, HDC dc)
 
         const int editH = s.baseH + ScalePx(6, s.scale);
         const int et = f.box.top + (s.fieldH - editH) / 2;
+        const int ew = editWidth > 0 ? editWidth : s.editW;
         f.edit = RECT{ f.box.left + s.inset, et,
-                       f.box.left + s.inset + s.editW, et + editH };
+                       f.box.left + s.inset + ew, et + editH };
         f.unit = RECT{ f.edit.right + ScalePx(10, s.scale),
                        f.box.top + (s.fieldH - s.baseH) / 2,
                        f.edit.right + ScalePx(10, s.scale) + ScalePx(120, s.scale),
@@ -187,6 +206,7 @@ void DlgBuildMetrics(DlgState& s, HDC dc)
 
     field(s.fInterval, L"1 - 1440");
     field(s.fOpacity, L"0 - 100");
+    field(s.fExpected, L"JP / AS20473", s.editW + ScalePx(120, s.scale));
 
     s.chkTopRc = { pad, y, cw - pad, y + s.checkH };
     y += s.checkH + s.gap;
@@ -195,7 +215,10 @@ void DlgBuildMetrics(DlgState& s, HDC dc)
     y += s.checkH + ScalePx(4, s.scale);
 
     s.noteRc = { pad + boxText, y, cw - pad, y + s.smallH };
-    y += s.smallH + ScalePx(22, s.scale);
+    y += s.smallH + ScalePx(14, s.scale);
+
+    s.chkIgnoreRc = { pad, y, cw - pad, y + s.checkH };
+    y += s.checkH + ScalePx(22, s.scale);
 
     s.btnOkRc = { cw - pad - s.btnW, y, cw - pad, y + s.btnH };
     s.btnCancelRc = { cw - pad - s.btnW * 2 - s.gap, y,
@@ -225,8 +248,16 @@ void DlgCreateChildren(DlgState& s, HWND h)
                          s.fOpacity.edit, ID_EDIT_OPACITY);
     SendMessageW(s.editOpacity, WM_SETFONT, (WPARAM)s.base, TRUE);
 
+    std::wstring expected = s.expectedCountry;
+    if (!s.expectedAsn.empty()) expected += (expected.empty() ? L"" : L" / ") + s.expectedAsn;
+    s.editExpected = make(L"EDIT", expected.c_str(), ES_AUTOHSCROLL,
+                          s.fExpected.edit, ID_EDIT_EXPECTED);
+    SendMessageW(s.editExpected, WM_SETFONT, (WPARAM)s.base, TRUE);
+
     s.chkTop = make(L"BUTTON", L"窗口总在最前", BS_OWNERDRAW, s.chkTopRc, ID_CHK_TOPMOST);
     s.chkAuto = make(L"BUTTON", L"开机时自动启动", BS_OWNERDRAW, s.chkAutoRc, ID_CHK_AUTOSTART);
+    s.chkIgnoreTz = make(L"BUTTON", L"忽略时区不一致", BS_OWNERDRAW,
+                         s.chkIgnoreRc, ID_CHK_IGNORE_TZ);
     s.btnOk = make(L"BUTTON", L"确定", BS_OWNERDRAW, s.btnOkRc, IDOK);
     s.btnCancel = make(L"BUTTON", L"取消", BS_OWNERDRAW, s.btnCancelRc, IDCANCEL);
 
@@ -303,14 +334,20 @@ LRESULT CALLBACK DlgProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         };
         drawField(s->fInterval, s->focus == 0);
         drawField(s->fOpacity, s->focus == 1);
+        drawField(s->fExpected, s->focus == 2);
 
         SetBkMode(mem, TRANSPARENT);
         DlgTextIn(mem, s->base, RGB(232, 234, 237), s->fInterval.label, L"刷新间隔", DT_LEFT);
         DlgTextIn(mem, s->base, RGB(232, 234, 237), s->fOpacity.label, L"不透明度", DT_LEFT);
+        DlgTextIn(mem, s->base, RGB(232, 234, 237), s->fExpected.label, L"期望出口（可选）", DT_LEFT);
         DlgTextIn(mem, s->base, RGB(150, 156, 166), s->fInterval.unit, L"分钟", DT_LEFT);
         DlgTextIn(mem, s->base, RGB(150, 156, 166), s->fOpacity.unit, L"%", DT_LEFT);
         DlgTextIn(mem, s->small, RGB(150, 156, 166), s->fInterval.hint, L"1 - 1440", DT_RIGHT);
         DlgTextIn(mem, s->small, RGB(150, 156, 166), s->fOpacity.hint, L"0 - 100", DT_RIGHT);
+        // 已有内容时不再画格式示例，否则会和输入值重复成两遍
+        if (!s->editExpected || GetWindowTextLengthW(s->editExpected) == 0)
+            DlgTextIn(mem, s->small, RGB(150, 156, 166), s->fExpected.hint,
+                      L"JP / AS20473", DT_RIGHT);
         DlgTextIn(mem, s->small, RGB(118, 124, 134), s->noteRc,
                   L"登录 Windows 时自动运行", DT_LEFT);
 
@@ -332,8 +369,11 @@ LRESULT CALLBACK DlgProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         // BS_OWNERDRAW 的 BUTTON 会先用系统浅灰擦一遍，不重铺底色会留浅灰方块
         FillRect(dc, &r, s->bgBrush);
 
-        if (dis->CtlID == ID_CHK_TOPMOST || dis->CtlID == ID_CHK_AUTOSTART) {
-            bool on = (dis->CtlID == ID_CHK_TOPMOST) ? s->topMost : s->autoStart;
+        if (dis->CtlID == ID_CHK_TOPMOST || dis->CtlID == ID_CHK_AUTOSTART ||
+            dis->CtlID == ID_CHK_IGNORE_TZ) {
+            bool on = (dis->CtlID == ID_CHK_TOPMOST) ? s->topMost
+                    : (dis->CtlID == ID_CHK_AUTOSTART) ? s->autoStart
+                                                       : s->ignoreTz;
             int box = s->box;
             int top = r.top + (r.bottom - r.top - box) / 2;
             {
@@ -407,18 +447,32 @@ LRESULT CALLBACK DlgProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         int id = LOWORD(wp);
         UINT code = HIWORD(wp);
 
-        if ((id == ID_EDIT_INTERVAL || id == ID_EDIT_OPACITY) &&
+        // 期望出口输入后要重画父窗口，否则格式示例会留在右边
+        if (id == ID_EDIT_EXPECTED && code == EN_CHANGE) {
+            InvalidateRect(h, &s->fExpected.box, FALSE);
+            return 0;
+        }
+
+        if ((id == ID_EDIT_INTERVAL || id == ID_EDIT_OPACITY || id == ID_EDIT_EXPECTED) &&
             (code == EN_SETFOCUS || code == EN_KILLFOCUS)) {
-            if (code == EN_SETFOCUS) s->focus = (id == ID_EDIT_OPACITY) ? 1 : 0;
-            else                     s->focus = -1;
+            if (code == EN_SETFOCUS) {
+                s->focus = (id == ID_EDIT_OPACITY) ? 1
+                         : (id == ID_EDIT_EXPECTED) ? 2 : 0;
+            } else {
+                s->focus = -1;
+            }
             InvalidateRect(h, &s->fInterval.box, FALSE);
             InvalidateRect(h, &s->fOpacity.box, FALSE);
+            InvalidateRect(h, &s->fExpected.box, FALSE);
             return 0;
         }
 
         if (id == IDOK) {
             s->interval = ReadIntField(s->edit, s->initialInterval, 1, 1440);
             s->opacity = ReadIntField(s->editOpacity, s->initialOpacity, 0, 100);
+            wchar_t expected[128] = {};
+            if (s->editExpected) GetWindowTextW(s->editExpected, expected, 128);
+            ParseExpectedText(expected, s->expectedCountry, s->expectedAsn);
             s->ok = true;
             s->done = true;
             DestroyWindow(h);
@@ -431,6 +485,9 @@ LRESULT CALLBACK DlgProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         } else if (id == ID_CHK_AUTOSTART) {
             s->autoStart = !s->autoStart;
             InvalidateRect(s->chkAuto, nullptr, TRUE);
+        } else if (id == ID_CHK_IGNORE_TZ) {
+            s->ignoreTz = !s->ignoreTz;
+            InvalidateRect(s->chkIgnoreTz, nullptr, TRUE);
         }
         return 0;
     }
@@ -439,7 +496,7 @@ LRESULT CALLBACK DlgProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         if (s && wp == ID_TIMER_DLGSHOT) {
             KillTimer(h, ID_TIMER_DLGSHOT);
             std::wstring err;
-            CaptureWindowToPng(h, s->shotPath, err);
+            if (!CaptureWindowToPng(h, s->shotPath, err)) s->shotFailed = true;
             s->done = true;
             DestroyWindow(h);
             return 0;
@@ -486,6 +543,9 @@ bool ShowSettingsDialog(HWND parent, const SettingsDialogInput& in,
     s.initialOpacity = in.cfg.opacityPercent;
     s.topMost = in.cfg.topMost;
     s.autoStart = in.cfg.autoStart;
+    s.ignoreTz = in.cfg.ignoreTimezone;
+    s.expectedCountry = in.cfg.expectedCountry;
+    s.expectedAsn = in.cfg.expectedAsn;
     s.scale = in.scale;
     s.shotPath = in.shotPath;
 
@@ -569,12 +629,16 @@ bool ShowSettingsDialog(HWND parent, const SettingsDialogInput& in,
     if (IsWindow(dlg)) DestroyWindow(dlg);
     if (IsWindow(parent)) SetForegroundWindow(parent);
 
+    out.shotFailed = s.shotFailed;
     if (s.ok) {
         out.ok = true;
         out.interval = s.interval;
         out.opacity = s.opacity;
         out.topMost = s.topMost;
         out.autoStart = s.autoStart;
+        out.expectedCountry = s.expectedCountry;
+        out.expectedAsn = s.expectedAsn;
+        out.ignoreTimezone = s.ignoreTz;
     }
     return s.ok;
 }

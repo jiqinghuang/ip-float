@@ -32,6 +32,7 @@ struct ExitProbe {
     bool         isProxy   = false;
     bool         isVpn     = false;
     int          utcOffsetMinutes = kUnknownOffset;
+    bool         tlsLenient = false;   // 严格校验失败后降级才拿到结果
     std::wstring err;
 };
 
@@ -49,6 +50,9 @@ struct ProbeInput {
     // 不匹配只影响总判定和诊断窗口，不在卡片上新增第六个徽章。
     std::wstring expectedCountry;      // 国家码，例如 JP
     std::wstring expectedAsn;          // 规范化为 AS20473
+
+    // true = 不把「IP 时区 ≠ 本机时区」当成可疑项（远程办公/跨时区常驻）
+    bool         ignoreTimezone = false;
 };
 
 struct Diagnosis {

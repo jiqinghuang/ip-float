@@ -10,7 +10,8 @@
 #   pwsh -File src\build.ps1 -MingwBin C:\msys64\mingw64\bin -OutDir dist -Werror
 [CmdletBinding()]
 param(
-    [string] $MingwBin = 'D:\Mingw64\bin',
+    # 留空时自动探测：-MingwBin > MINGW_BIN > MINGW_HOME\bin > PATH > 常见安装目录
+    [string] $MingwBin = '',
     [string] $OutDir,
     [switch] $Sign,
     [switch] $Test,
@@ -73,12 +74,39 @@ if (-not $OutDir) {
 }
 $OutDir = [System.IO.Path]::GetFullPath($OutDir)
 
-if (-not [System.IO.Path]::IsPathRooted($MingwBin)) {
-    $MingwBin = Join-Path (Get-Location).Path $MingwBin
+function Test-MingwDir([string] $dir) {
+    if (-not $dir) { return $false }
+    return (Test-Path -LiteralPath (Join-Path $dir 'g++.exe')) -and
+           (Test-Path -LiteralPath (Join-Path $dir 'windres.exe'))
 }
-$MingwBin = [System.IO.Path]::GetFullPath($MingwBin)
-if (-not (Test-Path -LiteralPath $MingwBin)) {
-    throw "找不到 MinGW 目录：$MingwBin（用 -MingwBin 指定）"
+
+if ($MingwBin) {
+    if (-not [System.IO.Path]::IsPathRooted($MingwBin)) {
+        $MingwBin = Join-Path (Get-Location).Path $MingwBin
+    }
+    $MingwBin = [System.IO.Path]::GetFullPath($MingwBin)
+} else {
+    $candidates = @()
+    if ($env:MINGW_BIN)  { $candidates += $env:MINGW_BIN }
+    if ($env:MINGW_HOME) { $candidates += (Join-Path $env:MINGW_HOME 'bin') }
+    $gppCmd = Get-Command g++.exe -CommandType Application -ErrorAction SilentlyContinue |
+              Select-Object -First 1
+    if ($gppCmd) { $candidates += (Split-Path -Parent $gppCmd.Source) }
+    $candidates += @(
+        'D:\Mingw64\bin',
+        'C:\msys64\mingw64\bin',
+        'C:\msys64\ucrt64\bin',
+        'C:\msys64\clang64\bin'
+    )
+    foreach ($candidate in $candidates) {
+        if (Test-MingwDir $candidate) { $MingwBin = $candidate; break }
+    }
+    if (-not $MingwBin) {
+        throw '找不到包含 g++.exe / windres.exe 的 MinGW 目录。请用 -MingwBin 指定，或把 MinGW 的 bin 放进 PATH。'
+    }
+}
+if (-not (Test-MingwDir $MingwBin)) {
+    throw "MinGW 目录里缺少 g++.exe 或 windres.exe：$MingwBin"
 }
 
 $gpp     = Join-Path $MingwBin 'g++.exe'
@@ -91,7 +119,7 @@ $exe = Join-Path $OutDir 'ip-float.exe'
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 $sources = @(
-    'main.cpp', 'app.cpp', 'config.cpp', 'http.cpp', 'ipinfo.cpp',
+    'main.cpp', 'app.cpp', 'config.cpp', 'http.cpp', 'json.cpp', 'ipinfo.cpp',
     'card.cpp', 'settings_dlg.cpp', 'detail_dlg.cpp', 'tray.cpp', 'selftest.cpp', 'util.cpp',
     'netinfo.cpp', 'probe.cpp', 'diag.cpp'
 ) | ForEach-Object { Join-Path $here $_ }
@@ -126,8 +154,9 @@ try {
 if ($Test) {
     # 每个套件单独编、单独跑；日志写 TEMP，避免默认 OutDir=仓库根目录时污染 git status
     $suites = @(
-        @{ Name = 'test_ipinfo'; Src = 'tests\test_ipinfo.cpp'; Extra = @('ipinfo.cpp') },
-        @{ Name = 'test_probe';  Src = 'tests\test_probe.cpp';  Extra = @('probe.cpp') }
+        @{ Name = 'test_ipinfo'; Src = 'tests\test_ipinfo.cpp'; Extra = @('ipinfo.cpp', 'http.cpp') },
+        @{ Name = 'test_probe';  Src = 'tests\test_probe.cpp';  Extra = @('probe.cpp') },
+        @{ Name = 'test_config'; Src = 'tests\test_config.cpp'; Extra = @('config.cpp') }
     )
 
     foreach ($suite in $suites) {
@@ -137,7 +166,8 @@ if ($Test) {
             '-o', $testExe,
             (Join-Path $root $suite.Src))
         foreach ($extra in $suite.Extra) { $testArgs += (Join-Path $here $extra) }
-        $testArgs += @((Join-Path $here 'util.cpp'), '-lgdi32', '-luser32', '-lshell32')
+        $testArgs += @((Join-Path $here 'json.cpp'), (Join-Path $here 'util.cpp'),
+                       '-lgdi32', '-luser32', '-lshell32', '-lws2_32', '-lwinhttp', '-ladvapi32')
 
         Write-Host "测试编译：$($suite.Name)"
         Remove-Item $outLog -Force -ErrorAction SilentlyContinue

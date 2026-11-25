@@ -17,6 +17,17 @@ void TrayInit(Tray& tray, HWND hwnd, HICON icon, UINT callbackMsg, const wchar_t
     tray.added = false;
 }
 
+void TraySetTip(Tray& tray, const std::wstring& tip)
+{
+    lstrcpynW(tray.nid.szTip, tip.c_str(), 128);
+    if (tray.added) {
+        // 只改 tip；图标/消息回调沿用 TrayInit 的设置
+        tray.nid.uFlags = NIF_TIP;
+        Shell_NotifyIconW(NIM_MODIFY, &tray.nid);
+        tray.nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    }
+}
+
 bool TrayAdd(Tray& tray)
 {
     tray.added = Shell_NotifyIconW(NIM_ADD, &tray.nid) != 0;

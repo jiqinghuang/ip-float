@@ -198,6 +198,18 @@ void TestTimezone()
     CheckSev(Diagnose(unknown).Find(LineId::Tz)->sev, Sev::Skip, "tz: unknown is skip");
 }
 
+void TestIgnoreTimezone()
+{
+    printf("\n-- ignore timezone --\n");
+    ProbeInput in = Base();
+    in.v4.utcOffsetMinutes = -300;
+    in.ignoreTimezone = true;
+    Diagnosis d = Diagnose(in);
+    CheckSev(d.Find(LineId::Tz)->sev, Sev::Skip, "tzignore: skip");
+    Check(d.Find(LineId::Tz)->na, "tzignore: hollow badge");
+    CheckSev(d.verdict, Sev::Ok, "tzignore: verdict stays ok");
+}
+
 void TestProxyOverlay()
 {
     printf("\n-- proxy overlay --\n");
@@ -310,6 +322,7 @@ int main()
     TestExitSameAsn();
     TestExitNoAsn();
     TestTimezone();
+    TestIgnoreTimezone();
     TestProxyOverlay();
     TestExpectation();
     TestNoProxyV6Direct();

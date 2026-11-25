@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <string>
 
+#include "json.h"
+
 // 数据源没给 UTC 偏移时的哨兵值（不能和任何真实偏移撞车）
 const int kNoOffset = 0x7fffffff;
 
@@ -18,9 +20,6 @@ struct IpInfo {
     uint64_t     at = 0;   // 抓取时间（FILETIME, UTC）
     int          utcOffsetMinutes = kNoOffset;   // 该 IP 所在时区相对 UTC（分钟）
 };
-
-// 从一段 JSON 里取字符串字段；找不到返回空串。够 ipinfo/ipapi 两个固定源用。
-std::string JsonStr(const std::string& json, const std::string& key);
 
 bool ParseIpInfo(const std::string& json, const std::wstring& source, IpInfo& out,
                  std::wstring& err);

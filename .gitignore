@@ -7,6 +7,8 @@
 dist/
 test_ipinfo.exe
 test_probe.exe
+test_config.exe
+ip-float-test-config.ini
 ip-float.exe
 
 # ── 运行时 / 自检产物 ────────────────────────────────────────

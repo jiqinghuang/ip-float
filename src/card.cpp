@@ -155,7 +155,10 @@ CardText BuildCardText(const IpInfo& info, bool hasInfo, bool lastError, bool ti
             t.subWarn = true;
         }
         if (lastError) {
-            tail += L"（刷新失败，显示上次结果）";
+            // README 承诺「写明原因」：有旧数据时也要把短原因带上，不能只说刷新失败。
+            // 太长会被 StringTrimmingEllipsisCharacter 截掉，完整原因仍在右键菜单。
+            tail = ago + L" · 刷新失败";
+            tail += errMsg.empty() ? L"（显示上次结果）" : (L"：" + errMsg);
             t.subWarn = true;
         }
         t.sub = tail;

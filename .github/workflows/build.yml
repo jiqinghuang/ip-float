@@ -22,6 +22,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify tag matches version.h
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $text = Get-Content -LiteralPath src/version.h -Raw
+          $m = [regex]::Match($text, '#define\s+IPFLOAT_VERSION_A\s+"([0-9]+\.[0-9]+\.[0-9]+)"')
+          if (-not $m.Success) { throw 'version.h 里找不到 IPFLOAT_VERSION_A' }
+          $expected = 'v' + $m.Groups[1].Value
+          if ($env:GITHUB_REF_NAME -ne $expected) {
+            throw "tag $env:GITHUB_REF_NAME 与 version.h 的版本不一致（期望 $expected）"
+          }
+          Write-Host "tag/version 一致：$expected"
+
       - name: Set up MinGW
         id: msys2
         uses: msys2/setup-msys2@v2
@@ -43,14 +56,19 @@ jobs:
           g++ --version | head -1
           g++ -std=gnu++17 -O2 -DUNICODE -D_UNICODE -Wall -Wextra -Werror \
             -o dist/test_ipinfo.exe \
-            tests/test_ipinfo.cpp src/ipinfo.cpp src/util.cpp \
-            -lgdi32 -luser32 -lshell32
+            tests/test_ipinfo.cpp src/json.cpp src/ipinfo.cpp src/http.cpp src/util.cpp \
+            -lgdi32 -luser32 -lshell32 -lws2_32 -lwinhttp
           ./dist/test_ipinfo.exe
           g++ -std=gnu++17 -O2 -DUNICODE -D_UNICODE -Wall -Wextra -Werror \
             -o dist/test_probe.exe \
             tests/test_probe.cpp src/probe.cpp src/util.cpp \
-            -lgdi32 -luser32 -lshell32
+            -lgdi32 -luser32 -lshell32 -lws2_32 -lwinhttp
           ./dist/test_probe.exe
+          g++ -std=gnu++17 -O2 -DUNICODE -D_UNICODE -Wall -Wextra -Werror \
+            -o dist/test_config.exe \
+            tests/test_config.cpp src/config.cpp src/json.cpp src/util.cpp \
+            -lgdi32 -luser32 -lshell32 -lws2_32 -lwinhttp -ladvapi32
+          ./dist/test_config.exe
 
       - name: Upload exe
         uses: actions/upload-artifact@v4
@@ -73,8 +91,16 @@ jobs:
           name: ip-float-windows
           path: dist
 
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum ip-float.exe > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/ip-float.exe
+          files: |
+            dist/ip-float.exe
+            dist/SHA256SUMS.txt
           generate_release_notes: true
