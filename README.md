@@ -18,16 +18,17 @@
 
 <p align="center">
   <img src="preview-diag.png" width="360" alt="网络诊断面板：顶部结论『未发现泄漏』与依据，下面按隧道 / 出口 / 一致性分组，逐行给出检查项、值与判定依据"> &nbsp;&nbsp;
-  <img src="preview-settings.png" width="320" alt="设置窗口：刷新间隔、不透明度、窗口总在最前、开机时自动启动">
+  <img src="preview-settings.png" width="320" alt="设置窗口：刷新间隔、不透明度、期望出口、窗口总在最前、开机时自动启动、忽略时区不一致">
 </p>
 
 <p align="center"><sub>左：右键「网络诊断…」，逐行给出依据 &nbsp;·&nbsp; 右：设置窗口</sub></p>
 
 |路径|说明|
 |-|-|
-|**`ip-float.exe`**|★ 成品（当前 **v3.3.1**，约 1 MB）。单文件、双击即开、零运行时依赖。**不进 git**，分发走 [Releases](https://github.com/jiqinghuang/ip-float/releases/latest)|
+|**`ip-float.exe`**|★ 成品（当前 **v3.4.0**，约 1 MB）。单文件、双击即开、零运行时依赖。**不进 git**，分发走 [Releases](https://github.com/jiqinghuang/ip-float/releases/latest)|
 |`src/`|C++ 源码（按职责拆分）+ 图标 + `build.ps1` / `sign.ps1`|
 |`tests/`|纯逻辑单测（`build.ps1 -Test`）|
+|`LICENSE`|MIT|
 |`.site-assets/`|网站素材生成 / 站点页面校验|
 |`preview-exe.png` / `preview-diag.png` / `preview-settings.png`|卡片、诊断面板、设置窗口的截图|
 
@@ -42,11 +43,13 @@
 * **单实例**：已经有一个在跑时，再双击只会把已有卡片闪一下，不会开出第二张
 * 点卡片**不抢焦点**（`WS_EX_NOACTIVATE`），你正在打的字不会被打断
 
-**右键菜单**（卡片和托盘是同一套）：状态行（IP / 组织 / 数据源 / 更新时间） · 立即刷新 · 刷新间隔（1/3/5/10/30/60 分钟） · 设置… · 网络诊断… · 复制 IP · 总在最前 · 开机自启 · 退出。
+**右键菜单**（卡片和托盘是同一套）：状态行（IP / 组织 / 数据源 / 更新时间） · 立即刷新 · 暂停/恢复刷新 · 刷新间隔（1/3/5/10/30/60 分钟） · 设置… · 网络诊断… · 复制 IP · 总在最前 · 开机自启 · 退出。
+
+网络变化（VPN 连上/断开、切 Wi-Fi、睡眠唤醒）会在 30 秒内自动触发一次刷新，不必等满刷新间隔。
 
 **网络诊断窗口**：把第三行那五个徽章摊开，逐行给出**依据**（「IPv6 出口 与 IPv4 同源 2001:db8:… （同为 AS20473）」），带刷新 / 复制 / 关闭；关掉后下次启动不会自动再打开，开着则记住。数据来自卡片同一轮抓取；v6 出口会额外发一两次短请求，DNS 解析器那次是本地查询。
-**托盘图标**：双击显示/隐藏；右键菜单同上，额外多一项「隐藏卡片 / 显示卡片」。
-**设置窗口**：刷新间隔（1–1440 分钟）、不透明度（0–100）、总在最前、开机自启（写 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`）。
+**托盘图标**：双击显示/隐藏；右键菜单同上，额外多一项「隐藏卡片 / 显示卡片」；tooltip 显示当前 IP、ASN 与判定（正常/注意/问题/未测），卡片隐藏时也能看到状态。
+**设置窗口**：刷新间隔（1–1440 分钟）、不透明度（0–100）、期望出口（国家码 / ASN）、总在最前、开机自启（写 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`）、忽略时区不一致。
 
 > 不透明度拉到 **0** 卡片就完全透明了（还占着位置、点不到），这时从**托盘图标**右键 → 设置… 改回来。
 
@@ -70,9 +73,9 @@
 
 删掉配置就恢复默认（右上角、5 分钟、94% 不透明）。`--ini` 指向的文件不存在时同样从默认值开始。
 
-**期望出口（可选）**：在 ini 里写 `expectedCountry=JP`、`expectedAsn=AS20473`（ASN 也可以只写 `20473`）。
+**期望出口（可选）**：在设置窗口的「期望出口」里填 `JP / AS20473`（只填 `JP` 或只填 `20473` 也可以）；等价于 ini 的 `expectedCountry=JP`、`expectedAsn=AS20473`。
 配置后诊断窗口会多一行「期望」，与当前出口不符时总判定至少是黄色；不配置则完全关闭这项检查。
-目前通过 ini 配置，设置窗口暂不提供输入框。
+**忽略时区不一致**：本地时区和出口 IP 的时区不同时，默认会标黄；远程办公/跨时区常驻可以勾上这项，诊断里「时区」变成「已忽略」（空心灰点）。
 
 ### 命令行
 
@@ -87,6 +90,8 @@ ip-float.exe --ini D:\tmp\ip-float.ini           # 固定用某份配置
 ```powershell
 ip-float.exe --render out\card.png --render-scale 2   # 离屏渲染卡片（不联网、不建窗、不读写配置）
 ip-float.exe --diag out\diag.txt                      # 出口体检报告（.txt + .json），不建窗口
+ip-float.exe --diag out\diag.txt --redact             # 脱敏报告：IP / 网卡 / 代理地址换成占位符
+ip-float.exe --diag out\diag.txt --fail-on warn       # 判定 WARN/BAD 时退出码 2（CI 用）
 ip-float.exe --render-dlg out\diag.png --render-scale 2  # 离屏渲染诊断面板（演示数据）
 ip-float.exe --demo --shot out\card-screen.png        # 屏幕抓图 smoke test（演示数据）
 ip-float.exe --demo --shot-dlg out\dlg.png            # 设置窗口抓图
@@ -96,7 +101,9 @@ ip-float.exe --demo --shot-dlg out\dlg.png            # 设置窗口抓图
   同时写 `card.png.json`（width/height/scale/cornerRadius/colors）和 `card.png.log`。
   `--render-scale 2` 是 2x（680×160），默认也是 2。
 * `--diag` 跑的是诊断窗口那套判定的同一个 `Diagnose()`：本机事实、v4/v6 出口、时区一致性、
-  DNS 解析器。适合丢给 CI 或贴进 issue。**需要多久就等多久**（v4 出口 + v6 出口 + 解析器归属），
+  DNS 解析器。适合丢给 CI 或贴进 issue，但报告默认含本机 IP / 公网 IPv6 / 网卡名 / 代理地址，
+  **公开贴出前请加 `--redact`**；`--fail-on bad|warn` 让 CI 能直接用退出码判定。
+  **需要多久就等多久**（v4 出口 + v6 出口 + 解析器归属），
   失败项会在报告里写明原因，不会假装通过；v6 远端回显不可用时会另列「本机 IPv6」并标注它不是远端出口。
 * `--shot` 走真实的卡片窗口，默认用演示数据（不联网）；只有同时给 `--source` 才取真实数据。
   `--shot-dlg` 只拍设置窗口，永远用演示数据、不联网。
@@ -104,6 +111,7 @@ ip-float.exe --demo --shot-dlg out\dlg.png            # 设置窗口抓图
   一次只能拍一个。
 * `--shot` 是屏幕抓图 smoke test，会受当前不透明度/桌面影响；给网页或文档用的干净素材
   请用 `--render`。`--shot-dlg` 拍的设置窗口本身不透明，不受不透明度影响。
+  两种抓图失败都会以退出码 1 结束（自检/CI 能直接发现“没写出文件”）。
 
 ## 源码结构
 
@@ -114,9 +122,10 @@ src/
   config.cpp|.h     ini 路径、读写、开机自启注册表、期望出口
   http.cpp|.h       WinHTTP GET + 错误码翻译
   ipinfo.cpp|.h     纯解析：JSON -> IpInfo（不碰窗口）
-  netinfo.cpp|.h    本机网络事实：代理、网卡/路由、IPv6、时区
+  netinfo.cpp|.h    本机网络事实：代理、网卡/路由、IPv6、时区、网络指纹
   probe.cpp|.h      出口判定（纯逻辑，可脱离窗口单测）
-  diag.cpp|.h       v4/v6/DNS 探测 + --diag 报告
+  diag.cpp|.h       v4/v6/DNS 探测 + --diag 报告（含 --redact）
+  json.cpp|.h       极简 JSON 取值（ipinfo/ipwho.is 共用，支持嵌套字段）
   card.cpp|.h       CardMetrics / BuildCardText / GDI+ 绘制 / PNG
   detail_dlg.cpp|.h 网络诊断窗口
   settings_dlg.cpp|.h 设置窗口
@@ -128,7 +137,8 @@ src/
   app.manifest      asInvoker + PerMonitorV2 + longPathAware
 tests/
   test_ipinfo.cpp   纯解析 / 卡片文案 / 时间 / URL 单测
-  test_probe.cpp    诊断判定 / 徽章 / 期望出口单测
+  test_probe.cpp    诊断判定 / 徽章 / 期望出口 / 时区开关单测
+  test_config.cpp   配置读写往返（期望出口 / 忽略时区）
 ```
 
 设计边界：纯逻辑（JSON、卡片文案、时间格式化、`Diagnose`）不碰窗口；I/O（HTTP、配置）不碰 UI；
@@ -136,7 +146,7 @@ tests/
 
 ## 数据源
 
-`https://ipinfo.io/json`，失败自动换 `https://ipapi.co/json/`；都不需要 key，
+`https://ipinfo.io/json`，失败自动换 `https://ipwho.is/`；都不需要 key，
 超时是 DNS / 连接 / 发送 / 接收各 8 秒。失败时保留上次结果、状态点变橙，并在卡片上写明原因：
 
 * WinHTTP 错误码翻成了中文，例如 `12185：证书用途不匹配（常见于代理/中间人拦截）`、`12029：无法连接（端口不通、被墙，或该走代理）`
@@ -144,10 +154,13 @@ tests/
 
 用 `--source` 换成自建源后，地址会写进 ini 的 `source=`，开机自启也会继续用它。
 清空 `source=`（或 `--source ""`）即可回到内置双源。
+自定义源至少要返回 `ip`；建议同时给 `country_code`、`region`、`city`、`asn`、`org`、`utc_offset`（或 `timezone.offset`，单位秒）。
+两个源都失败时，右键菜单会把每个源的原因并列（例如 `ipinfo.io：429 …；ipwho.is：403 …`），卡片只显示最后一条短原因。
+主源返回 IPv6 也不会被当成 IPv4：诊断会单独补探 IPv4 出口。
 
 ## 重新编译
 
-源码在 `src/`，默认需要 `D:\Mingw64\bin` 下的 `g++` 与 `windres`（可用 `-MingwBin` 改）：
+源码在 `src/`，需要 `g++` 与 `windres`。不传 `-MingwBin` 时会按 `MINGW_BIN` → `MINGW_HOME\bin` → `PATH` → 常见 MSYS2 / MinGW 目录自动探测：
 
 ```powershell
 pwsh -File src\build.ps1                  # 只编译，输出到仓库根目录
@@ -157,14 +170,16 @@ pwsh -File src\build.ps1 -Sign            # 编译 + 签名
 ```
 
 * **默认不签名**：构建不应该有“创建根证书”这种副作用；签名是显式步骤。
-* `-Test` 会编译并运行两套单测：`tests\test_ipinfo.cpp`（JSON 转义/代理对、ipinfo/ipapi 解析、
-  `ShortAsn`、`Ago`、URL host）和 `tests\test_probe.cpp`（TUN/V6/路径/时区/DNS 判定、徽章、期望出口）。
+* `-Test` 会编译并运行三套单测：`tests\test_ipinfo.cpp`（JSON 转义/代理对/嵌套字段、ipinfo/ipwho.is 解析、
+  `ShortAsn`、`Ago`、URL host、地址族、TLS 错误码）、`tests\test_probe.cpp`（TUN/V6/路径/时区/DNS 判定、徽章、期望出口、忽略时区）
+  和 `tests\test_config.cpp`（配置读写往返）。
 * 版本号在 `src/version.h`（代码 / User-Agent）；`src/app.rc` 的 `VERSIONINFO` 和
   `src/app.manifest` 的 `assemblyIdentity` 里还有两份字面版本号。`build.ps1` 编译前会检查三处一致。
   exe 带 manifest（PerMonitorV2、asInvoker、longPathAware）。
 * 构建开了 `-Wall -Wextra`，**应当零警告**；发布/CI 建议加 `-Werror`。
-* 发版：改好三处版本号后打 tag 并 push（例如 `git tag v3.3.1 && git push origin v3.3.1`），
-  GitHub Actions 会构建、跑两套单测并把 exe 上传到对应的 Release。
+* 发版：改好三处版本号后打 tag 并 push（例如 `git tag v3.4.0 && git push origin v3.4.0`），
+  GitHub Actions 会校验 tag 与 `version.h` 一致、构建、跑三套单测，并把 exe + SHA256SUMS.txt 上传到对应的 Release。
+  tag 和版本不一致会直接失败，不会发出“版本号对不上”的包。
 
 ## 「打开文件 - 安全警告」/「Windows 已保护你的电脑」弹窗
 
@@ -290,7 +305,10 @@ python .site-assets\validate.py --site-root ..\jiqinghuang.github.io
   **实心灰 ● = 测了但没测到**。两者绝不能混为一谈，否则健康状态看起来像探测失败。
 * 走 Windows **schannel**（WinHTTP）。如果网络里有中间人/企业代理导致证书校验失败，
   会看到 `12175/12182/12185` 之类的错误码 —— 这类环境需要换用 OpenSSL 栈的客户端。
-* 每 N 分钟会向 ipinfo.io / ipapi.co 发一次请求，等于把出口 IP 报给第三方；介意就调大间隔或换自建源。
+* 每 N 分钟会向 ipinfo.io / ipwho.is 发一次请求，等于把出口 IP 报给第三方；介意就调大间隔或换自建源。
+* **IP 回显默认严格校验证书**；只有证书类错误时才降级重试一次，并在诊断里标「TLS 证书未验证」。普通数据源（ipinfo/ipwho）始终严格校验。
+* **主数据源返回 IPv6 时**，卡片正常显示该地址，诊断会单独补探 IPv4 出口；如果网络只有 IPv6，IPv4 那一行会显示探测失败，这是模型限制而不是泄漏。
+* v6 出口成功结果缓存 10 分钟、失败缓存 2 分钟；“立即刷新”/诊断里的“刷新”会强制绕过缓存。
 * exe 是**自签名**的：证书放在本机 `CurrentUser\Root`，**只对这个账户有效**。
   换机器 / 换用户后弹窗会回来 —— 用 `pwsh -File src\sign.ps1 -ExportCer` 导出 `.cer`，
   在那台机器上双击安装到「当前用户 → 受信任的根证书颁发机构」即可。
@@ -303,3 +321,7 @@ python .site-assets\validate.py --site-root ..\jiqinghuang.github.io
 * **`ip-float.exe` 不进仓库**：分发走 [GitHub Releases](https://github.com/jiqinghuang/ip-float/releases/latest)，
   下载链接固定为 `/releases/latest`。重编一次哈希就变一次，把约 1 MB 的二进制反复写进 git
   历史没有意义。`build.ps1` 默认输出到仓库根目录，但 `dist/` 和 `ip-float.exe` 都被忽略。
+
+## 许可
+
+[MIT](LICENSE)。
